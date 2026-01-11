@@ -1,0 +1,17 @@
+# Telegram Bot
+python-telegram-bot==20.7
+
+# Groq API
+groq==0.4.1
+
+# HTTP requests
+requests==2.31.0
+
+# ChromaDB (yerel mod için)
+chromadb==0.4.22
+
+# Async support
+aiohttp==3.9.1
+
+# Environment
+python-dotenv==1.0.0
