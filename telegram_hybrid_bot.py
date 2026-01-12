@@ -320,7 +320,11 @@ def get_all():
 def run_flask():
     """Flask API'yi ayrı thread'de çalıştır"""
     logger.info(f"Sync API başlatılıyor (port {config.port})")
-    sync_app.run(host="0.0.0.0", port=config.port, use_reloader=False)
+    try:
+        sync_app.run(host="0.0.0.0", port=config.port, use_reloader=False, threaded=True)
+        logger.info("Sync API başarıyla başlatıldı")
+    except Exception as e:
+        logger.error(f"Sync API başlatma hatası: {e}")
 
 
 # ==================== TELEGRAM BOT ====================
@@ -451,9 +455,12 @@ def main():
     storage = RailwayStorage(config.storage_path)
 
     # Flask API'yi ayrı thread'de başlat
-    flask_thread = threading.Thread(target=run_flask, daemon=True)
+    flask_thread = threading.Thread(target=run_flask, daemon=False)
     flask_thread.start()
     logger.info("Sync API thread başlatıldı")
+    # Flask'ın başlaması için bekle
+    import time
+    time.sleep(2)
 
     # Telegram bot
     bot = RailwayBot()

@@ -9,6 +9,7 @@ WORKDIR /app
 RUN apt-get update && apt-get install -y \
     gcc \
     g++ \
+    curl \
     && rm -rf /var/lib/apt/lists/*
 
 # Python paketlerini kopyala
@@ -23,8 +24,5 @@ COPY telegram_hybrid_bot.py .
 # Persistent storage dizini oluştur
 RUN mkdir -p /data/storage
 
-# Portu aç (Railway otomatik ayarlar)
-# EXPOSE 8000
-
-# Bot'u başlat
+# Telegram bot'u başlat
 CMD ["python", "-u", "telegram_hybrid_bot.py"]
