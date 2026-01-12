@@ -576,6 +576,7 @@ Yanıtı SADECE şu JSON formatında ver:
   }}
 }}
 
+ÖNEMLİ (VETO KURALI): Eğer mesajın içinde 'sil', 'iptal', 'vazgeç', 'boşver' gibi bir niyet varsa, içinde saat/zaman geçse bile intent'i 'delete' yap. Silme/İptal niyeti, hatırlatıcı kurmaktan daha önceliklidir.
 Önemli: Eğer bir zaman belirtilmemişse intent 'note' veya 'question' olmalıdır."""
         
         try:
@@ -1112,32 +1113,31 @@ class RailwayBot:
         stats = self.storage.get_stats()
 
         keyboard = [
-            [InlineKeyboardButton("📝 Not Al", callback_data=f"note_{user_id}"),
-             InlineKeyboardButton("🔍 Ara", callback_data=f"search_{user_id}")],
-            [InlineKeyboardButton("⏰ Hatırlatıcı", callback_data=f"reminder_{user_id}"),
-             InlineKeyboardButton("🔄 Rutin", callback_data=f"routine_{user_id}")],
-            [InlineKeyboardButton("📊 Durum", callback_data=f"status_{user_id}")]
+            [InlineKeyboardButton("🧠 Hafıza & Arama", callback_data=f"menu_memory"),
+             InlineKeyboardButton("⏰ Zaman & Plan", callback_data=f"menu_time")],
+            [InlineKeyboardButton("🛠️ Yardımcı Araçlar", callback_data=f"menu_tools"),
+             InlineKeyboardButton("📊 Sistem Durumu", callback_data=f"status_{user_id}")],
+            [InlineKeyboardButton("✨ Tümünü Listele", callback_data=f"list_all")]
         ]
 
-        reply = f"""🚂 **Asistan Bot - 24/7 Aktif**
+        reply = f"""🌟 **Railway Asistan: Özellikler Evreni** 🌟
 
-Merhaba {update.effective_user.first_name}!
+Merhaba {update.effective_user.first_name}! Ben senin dijital dış zihninim. Senin için yapabileceklerim aşağıda kategorize edildi:
 
-**Özellikler:**
-• 📝 Not alma
-• ⏰ Hatırlatıcı (tarih/saat)
-• 🔄 Rutin hatırlatmalar
-• 🔍 Notlarda arama
+🧠 **HAFIZA (Notlar & AI)**
+• Sadece yaz veya ses at! Ben her şeyi kategorize ederek saklarım.
+• "Video işini sorsana" gibi sorularla geçmişi sorgulayabilirsin.
 
-**Durum:**
-📝 Not: {stats['total_notes']}
-⏰ Bekleyen hatırlatıcı: {stats['pending_reminders']}
-🔄 Aktif rutin: {stats['active_routines']}
+⏰ **ZAMAN (Hatırlatıcı & Rutin)**
+• "Perşembe 20:00 video" de, ben hazırlık süreni bile hesaplayıp seni uyarırım.
+• Rutin işlerini (ilaç, toplantı) otomatik takip ederim.
 
-**Komutlar:**
-/remind → Hatırlatıcı ekle
-/routine → Rutin ekle
-/list → Listele"""
+🛠️ **YARDIMCI ARAÇLAR**
+• 🎙️ Sesli mesajlarını metne çeviririm.
+• 🖼️ Fotoğrafları analiz edip içindeki bilgileri not alırım.
+• 🗓️ Google Takvim'inle tam senkron çalışırım.
+
+İlgilendiğin alanı aşağıdan seçerek daha fazla bilgi alabilirsin:"""
 
         await update.message.reply_text(
             reply,
@@ -1535,6 +1535,26 @@ Lütfen SADECE yukarıdaki notlara dayanarak soruyu yanıtla.
         elif action == "search":
             self.user_search_mode[user_id] = True
             await query.edit_message_text("🔍 Aramak istediğiniz kelimeleri yazın...")
+        elif action == "menu":
+            target = parts[1]
+            if target == "memory":
+                text = "🧠 **Hafıza & AI Soruları**\n\n• **Not Al:** Sadece yaz veya ses at, gerisini bana bırak.\n• **Soru Sor:** \"Geçen hafta ne demiştik?\", \"Video notumu bul\" gibi sorularla geçmişi sorgula.\n• **Arama:** /list komutuyla veya aşağıdaki 'Ara' butonuyla kelime bazlı arama yap."
+                kb = [[InlineKeyboardButton("🔍 Kelime İle Ara", callback_data=f"search_{user_id}"),
+                       InlineKeyboardButton("🔙 Geri", callback_data="start_menu")]]
+                await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(kb), parse_mode='Markdown')
+            elif target == "time":
+                text = "⏰ **Zaman & Planlama**\n\n• **Hatırlatıcı:** \"Yarın 10:00 toplantı\" yazman yeterli.\n• **Rutin:** /routine ile tekrarlanan görevler oluştur.\n• **Akıllı Hazırlık:** Önemli işlerde senin için otomatik hazırlık uyarıları kurarım."
+                kb = [[InlineKeyboardButton("📋 Bekleyenleri Listele", callback_data="list_all"),
+                       InlineKeyboardButton("🔙 Geri", callback_data="start_menu")]]
+                await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(kb), parse_mode='Markdown')
+            elif target == "tools":
+                text = "🛠️ **Yardımcı Araçlar**\n\n• 🎙️ **Sesli Mesaj:** Uzun sesleri anında metne çevirip özetlerim.\n• 🖼️ **Görsel Analiz:** Fotoğraf at, içindeki bilgileri not alayım.\n• 🗓️ **Google Takvim:** /auth ile bağla, her şey senkron kalsın."
+                kb = [[InlineKeyboardButton("🔙 Geri", callback_data="start_menu")]]
+                await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(kb), parse_mode='Markdown')
+        elif data == "start_menu":
+            await self.start(update, context) # Re-send main menu
+        elif data == "list_all":
+            await self.list_command(update, context)
         elif action == "reminder":
             await query.edit_message_text(
                 "⏰ Hatırlatıcı eklemek için:\n\n/remind <zaman> <mesaj>\n\n"
@@ -1584,7 +1604,7 @@ Lütfen SADECE yukarıdaki notlara dayanarak soruyu yanıtla.
             rem_id = "_".join(parts[1:-1])
             
             new_time = (get_now_utc() + timedelta(minutes=minutes)).isoformat()
-            if storage.reschedule_reminder(rem_id, new_time):
+            if self.storage.reschedule_reminder(rem_id, new_time):
                 await query.edit_message_text(f"⏳ {minutes} dakika ertelendi.")
             else:
                 await query.edit_message_text("⚠️ Hatırlatıcı bulunamadı veya güncellenemedi.")
@@ -2081,6 +2101,7 @@ def main():
 
     # Handlers
     app.add_handler(CommandHandler("start", bot.start))
+    app.add_handler(CommandHandler("menu", bot.start))
     app.add_handler(CommandHandler("remind", bot.remind_command))
     app.add_handler(CommandHandler("routine", bot.routine_command))
     app.add_handler(CommandHandler("list", bot.list_command))
