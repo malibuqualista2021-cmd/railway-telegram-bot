@@ -560,7 +560,8 @@ Yanıtı SADECE şu JSON formatında ver:
     "text": "asıl mesaj içeriği",
     "time": "varsa zaman (HH:MM veya natural language)",
     "frequency": "routine ise sıklık",
-    "category": "note ise kategori"
+    "category": "note ise kategori",
+    "estimated_prep_minutes": "Eğer bu bir deadline, yayın veya önemli bir etkinlikse (örn: video yayını, toplantı, randevu), hazırlık için gereken tahmini dakika (int). Örn: Video/Yayın=120, Toplantı=15, Randevu=30-60. Gerekmiyorsa 0."
   }}
 }}
 
@@ -1010,11 +1011,28 @@ class ReminderService:
     def __init__(self, storage):
         self.storage = storage
 
-    def create(self, user_id: int, text: str, time_str: str) -> Optional[str]:
+    def create(self, user_id: int, text: str, time_str: str, prep_mins: int = 0) -> List[str]:
         dt_utc = parse_reminder_time(time_str)
-        if dt_utc:
-            return self.storage.add_reminder(user_id, text, dt_utc.isoformat())
-        return None
+        if not dt_utc:
+            return []
+            
+        ids = []
+        # Main reminder
+        main_id = self.storage.add_reminder(user_id, text, dt_utc.isoformat())
+        if main_id:
+            ids.append(main_id)
+            
+        # Prep reminder
+        if prep_mins > 0:
+            prep_dt = dt_utc - timedelta(minutes=prep_mins)
+            # Eğer hazırlık zamanı geçmişte değilse ekle
+            if prep_dt > get_now_utc():
+                prep_text = f"🚨 HAZIRLIK: {text}"
+                prep_id = self.storage.add_reminder(user_id, prep_text, prep_dt.isoformat())
+                if prep_id:
+                    ids.append(prep_id)
+                    
+        return ids
 
     def list_pending(self, user_id: int):
         return self.storage.get_user_reminders(user_id)
@@ -1349,8 +1367,23 @@ Sıklık seçenekleri:
 
     async def _handle_reminder_intent(self, update, user_id, text, params):
         rem_text = params.get("text") or text
-        if self.reminder_service.create(user_id, rem_text, params["time"]):
-            await update.message.reply_text(f"⏰ Tamamdır! Hatırlatıcı eklendi: {params['time']}\n📝 {rem_text}")
+        time_str = params.get("time")
+        prep_mins = int(params.get("estimated_prep_minutes", 0))
+        
+        ids = self.reminder_service.create(user_id, rem_text, time_str, prep_mins)
+        
+        if not ids:
+            await update.message.reply_text(f"❌ Zaman formatı anlaşılamadı: {time_str}")
+            return
+            
+        if len(ids) > 1:
+            await update.message.reply_text(
+                f"⏰ **Çift Hatırlatıcı Kuruldu!**\n\n"
+                f"🎯 **Hedef:** {time_str} - {rem_text}\n"
+                f"🛠️ **Hazırlık:** {prep_mins} dakika öncesine (`🚨 HAZIRLIK`) bir uyarı daha ekledim."
+            )
+        else:
+            await update.message.reply_text(f"⏰ Tamamdır! Hatırlatıcı eklendi: {time_str}\n📝 {rem_text}")
 
     async def _handle_routine_intent(self, update, user_id, params):
         if self.routine_service.create(user_id, params["frequency"], params["time"], params["text"]):
