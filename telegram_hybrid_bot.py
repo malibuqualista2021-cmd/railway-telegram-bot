@@ -45,6 +45,7 @@ logger = logging.getLogger(__name__)
 class Config:
     telegram_token: str = os.getenv("TELEGRAM_TOKEN", "")
     groq_key: str = os.getenv("GROQ_API_KEY", "")
+    deepgram_key: str = os.getenv("DEEPGRAM_API_KEY", "")
     sync_token: str = os.getenv("SYNC_TOKEN", "default-sync-token")
     storage_path: str = os.getenv("RAILWAY_VOLUME_URL", "/data/storage")
     port: int = int(os.getenv("PORT", "5000"))
@@ -236,9 +237,14 @@ Kısa, öz ve dostça yanıtlar ver."""
             return None
 
     def transcribe(self, audio_file: bytes) -> Optional[str]:
-        """Ses dosyasını metne çevir (OpenAI Whisper - en ucuz)"""
+        """Ses dosyasını metne çevir (Deepgram - Ücretsiz 200dk/ay)"""
         import tempfile
         import os
+
+        deepgram_key = config.deepgram_key
+        if not deepgram_key:
+            logger.warning("DEEPGRAM_API_KEY not set")
+            return None
 
         try:
             logger.info(f"Starting transcription, audio size: {len(audio_file)} bytes")
@@ -250,37 +256,35 @@ Kısa, öz ve dostça yanıtlar ver."""
 
             logger.info(f"Temp file created: {tmp_path}")
 
-            # OpenAI Whisper API (çok ucuz, ama API key gerekli)
-            # Kullanıcının GROQ key'i ile aynı hesaptan olabilir
-            openai_key = os.getenv("OPENAI_API_KEY", "")
+            # Deepgram API
+            url = "https://api.deepgram.com/v1/listen"
+            headers = {
+                "Authorization": f"Token {deepgram_key}",
+                "Content-Type": "audio/ogg"
+            }
 
-            if openai_key:
-                # OpenAI Whisper kullan
-                import openai
-                client = openai.OpenAI(api_key=openai_key)
+            with open(tmp_path, "rb") as audio:
+                logger.info("Sending to Deepgram")
+                response = requests.post(
+                    url,
+                    headers=headers,
+                    data=audio,
+                    timeout=30
+                )
 
-                with open(tmp_path, "rb") as audio:
-                    logger.info("Sending to OpenAI Whisper")
-                    transcription = client.audio.transcriptions.create(
-                        model="whisper-1",
-                        file=audio,
-                        language="tr"
-                    )
+            # Geçici dosyayı sil
+            try:
+                os.unlink(tmp_path)
+            except:
+                pass
 
-                try:
-                    os.unlink(tmp_path)
-                except:
-                    pass
-
-                logger.info(f"Transcription: {transcription.text[:100]}")
-                return transcription.text
+            if response.status_code == 200:
+                result = response.json()
+                text = result.get("results", [{}])[0].get("transcript", "").strip()
+                logger.info(f"Transcription: {text[:100] if text else 'empty'}")
+                return text if text else None
             else:
-                # API key yok - hata döndür
-                try:
-                    os.unlink(tmp_path)
-                except:
-                    pass
-                logger.warning("OPENAI_API_KEY not set")
+                logger.error(f"Deepgram error: {response.status_code} - {response.text[:200]}")
                 return None
 
         except Exception as e:
