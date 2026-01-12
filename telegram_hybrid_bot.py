@@ -529,15 +529,23 @@ def parse_reminder_time(time_str: str) -> Optional[str]:
 
         if not target_local:
             logger.info(f"[PARSE_TIME] Falling back to dateutil parser...")
-            target_local = parser.parse(time_str, fuzzy=True, dayfirst=True)
+            # Eğer string YYYY-MM-DD ile başlıyorsa dayfirst=False olmalı
+            is_iso_start = re.match(r'^\d{4}-\d{2}-\d{2}', time_str)
+            target_local = parser.parse(time_str, fuzzy=True, dayfirst=not is_iso_start)
+            
             if target_local.tzinfo is None:
                 target_local = USER_TZ.localize(target_local)
-            if target_local < now_local and target_local.date() == now_local.date():
+            
+            # Eğer parser geçmiş bir saat döndürdüyse (ve sadece tarih verilmişse) bugüne/yarına çek
+            if target_local < now_local and len(time_str) <= 10:
                 target_local += timedelta(days=1)
 
         # Convert to UTC for storage
+        if target_local.tzinfo is None:
+            target_local = USER_TZ.localize(target_local)
+        
         target_utc = target_local.astimezone(pytz.UTC)
-        logger.info(f"[PARSE_TIME] Local: {target_local.isoformat()} -> UTC: {target_utc.isoformat()}")
+        logger.info(f"[PARSE_TIME] Final: Local {target_local} -> UTC {target_utc.isoformat()}")
         return target_utc.isoformat()
 
     except Exception as e:
@@ -1016,7 +1024,7 @@ Metin: {transcript}
 Sadece JSON döndür, başka bir şey yazma."""
 
         try:
-            logger.info("[REMINDER] Calling Groq API to extract time...")
+            logger.info("[REMINDER] Calling Groq API...")
             response = self.groq.client.chat.completions.create(
                 model=self.groq.chat_model,
                 messages=[{"role": "user", "content": prompt}],
@@ -1025,20 +1033,38 @@ Sadece JSON döndür, başka bir şey yazma."""
             )
 
             raw_content = response.choices[0].message.content
-            logger.info(f"[REMINDER] Groq raw response: {raw_content}")
+            logger.info(f"[REMINDER] Groq response: {raw_content}")
 
-            import json
             result = json.loads(raw_content)
-            time_str = result.get("time", "")
-            message = result.get("message", transcript)
-
-            logger.info(f"[REMINDER] Extracted time: '{time_str}'")
-            logger.info(f"[REMINDER] Extracted message: '{message}'")
+            time_str = result.get("time", "").strip()
+            message = result.get("message", transcript).strip()
+            is_relative = result.get("is_relative", False)
 
             if time_str:
-                logger.info(f"[REMINDER] Parsing time: {time_str}")
-                remind_time = parse_reminder_time(time_str)
-                logger.info(f"[REMINDER] Parsed remind_time: {remind_time}")
+                remind_time = None
+                try:
+                    # YYYY-MM-DD HH:MM formatı kontrolü
+                    if re.match(r'^\d{4}-\d{2}-\d{2} \d{2}:\d{2}$', time_str):
+                        dt_parsed = datetime.strptime(time_str, "%Y-%m-%d %H:%M")
+                        
+                        # --- TEMPORAL HALLUCINATION GUARD (Fail-Safe) ---
+                        # Eğer AI ayı yanlışlıkla (flipped) döndürdüyse ve işlem 'relative' ise düzelt
+                        # Örnek: Ocak'tayız ama AI Aralık döndürdü.
+                        if is_relative and dt_parsed.month != now_local.month:
+                            # 1 aylık bir sapma normal olabilir (ayın sonunda yarın dendiğinde)
+                            # Ama 11 aylık bir sapma (Jan vs Dec flip) kesinlikle hatadır.
+                            if abs(dt_parsed.month - now_local.month) >= 10:
+                                logger.warning(f"[FAIL-SAFE] Detected Month Hallucination! Correcting {dt_parsed.month} to {now_local.month}")
+                                dt_parsed = dt_parsed.replace(month=now_local.month, day=now_local.day)
+
+                        dt_local = USER_TZ.localize(dt_parsed)
+                        remind_time = dt_local.astimezone(pytz.UTC).isoformat()
+                        logger.info(f"[REMINDER] Sentinel Parse success: {remind_time}")
+                    else:
+                        remind_time = parse_reminder_time(time_str)
+                except Exception as e:
+                    logger.error(f"[REMINDER] Parse logic fail: {e}")
+                    remind_time = parse_reminder_time(time_str)
                 
                 if remind_time:
                     storage.add_reminder(user_id, message, remind_time)
