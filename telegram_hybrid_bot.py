@@ -1110,9 +1110,16 @@ class RailwayBot:
     async def start(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         logger.info(f"=== START COMMAND RECEIVED from {update.effective_user.id} ===")
         user_id = update.effective_user.id
-        stats = self.storage.get_stats()
+        
+        # Persistent Bottom Keyboard
+        reply_kb = [
+            ["🌟 Menü", "📋 Listele"],
+            ["🔍 Hafızada Ara", "📊 Durum"]
+        ]
+        persistent_markup = ReplyKeyboardMarkup(reply_kb, resize_keyboard=True, persistent=True)
 
-        keyboard = [
+        # Rich Inline Menu (Feature Universe)
+        inline_kb = [
             [InlineKeyboardButton("🧠 Hafıza & Arama", callback_data=f"menu_memory"),
              InlineKeyboardButton("⏰ Zaman & Plan", callback_data=f"menu_time")],
             [InlineKeyboardButton("🛠️ Yardımcı Araçlar", callback_data=f"menu_tools"),
@@ -1122,27 +1129,24 @@ class RailwayBot:
 
         reply = f"""🌟 **Railway Asistan: Özellikler Evreni** 🌟
 
-Merhaba {update.effective_user.first_name}! Ben senin dijital dış zihninim. Senin için yapabileceklerim aşağıda kategorize edildi:
+Merhaba {update.effective_user.first_name}! Ben senin dijital dış zihninim. Aşağıdaki butonları kullanarak bana hükmedebilirsin:
 
-🧠 **HAFIZA (Notlar & AI)**
-• Sadece yaz veya ses at! Ben her şeyi kategorize ederek saklarım.
-• "Video işini sorsana" gibi sorularla geçmişi sorgulayabilirsin.
+🧠 **HAFIZA**: Not al, ses at veya geçmişi sorgula.
+⏰ **ZAMAN**: Hatırlatıcı kur, rutinlerini yönet.
+🛠️ **ARAÇLAR**: Ses çeviri, Fotoğraf analizi, Google Takvim.
 
-⏰ **ZAMAN (Hatırlatıcı & Rutin)**
-• "Perşembe 20:00 video" de, ben hazırlık süreni bile hesaplayıp seni uyarırım.
-• Rutin işlerini (ilaç, toplantı) otomatik takip ederim.
-
-🛠️ **YARDIMCI ARAÇLAR**
-• 🎙️ Sesli mesajlarını metne çeviririm.
-• 🖼️ Fotoğrafları analiz edip içindeki bilgileri not alırım.
-• 🗓️ Google Takvim'inle tam senkron çalışırım.
-
-İlgilendiğin alanı aşağıdan seçerek daha fazla bilgi alabilirsin:"""
+Klavye üzerindeki hazır butonları da kullanabilirsin! 👇"""
 
         await update.message.reply_text(
             reply,
-            reply_markup=InlineKeyboardMarkup(keyboard),
+            reply_markup=persistent_markup, # Set persistent keyboard
             parse_mode='Markdown'
+        )
+        
+        # Also send the inline menu for discovery
+        await update.message.reply_text(
+            "Keşfetmek istediğin alanı seç:",
+            reply_markup=InlineKeyboardMarkup(inline_kb)
         )
 
     async def remind_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1297,6 +1301,21 @@ Sıklık seçenekleri:
     async def handle_message(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         user_id = update.effective_user.id
         text = update.message.text
+
+        # --- UX: PERSISTENT KEYBOARD ROUTING ---
+        if text == "🌟 Menü":
+            await self.start(update, context)
+            return
+        elif text == "📋 Listele":
+            await self.list_command(update, context)
+            return
+        elif text == "🔍 Hafızada Ara":
+            self.user_search_mode[user_id] = True
+            await update.message.reply_text("🔍 Aramak istediğiniz kelimeleri yazın...")
+            return
+        elif text == "📊 Durum":
+            await self.button_callback(update, context, forced_data=f"status_{user_id}")
+            return
 
         # Google Auth linki mi? (Critical setup bypass)
         if "localhost" in text and "code=" in text:
@@ -1516,19 +1535,28 @@ Lütfen SADECE yukarıdaki notlara dayanarak soruyu yanıtla.
             if ai_response:
                 await update.message.reply_text(f"🤖 **Hafıza:**\n\n{ai_response}", parse_mode='Markdown')
         else:
-            # Not yoksa doğrudan genel AI cevabı
-            ai_response = self.groq.chat(inquiry_text)
-            if ai_response:
-                await update.message.reply_text(f"🤖 **AI:**\n\n{ai_response}", parse_mode='Markdown')
+            await update.message.reply_text(f"🤖 **AI:**\n\n{ai_response}", parse_mode='Markdown')
 
-    async def button_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+    async def _update_ui(self, update: Update, text: str, reply_markup=None, parse_mode=None):
+        """Support: Handle UI updates for both callback queries and direct replies"""
+        if update.callback_query:
+            try:
+                await update.callback_query.edit_message_text(text, reply_markup=reply_markup, parse_mode=parse_mode)
+            except Exception:
+                await update.callback_query.message.reply_text(text, reply_markup=reply_markup, parse_mode=parse_mode)
+        else:
+            await update.message.reply_text(text, reply_markup=reply_markup, parse_mode=parse_mode)
+
+    async def button_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE, forced_data: str = None):
         query = update.callback_query
-        await query.answer()
+        user_id = update.effective_user.id
+        data = forced_data or query.data
+        
+        if query:
+            await query.answer()
 
-        data = query.data
         parts = data.split('_')
         action = parts[0]
-        user_id = query.from_user.id  # Daha güvenilir: Butona basan kullanıcı
 
         if action == "note":
             await query.edit_message_text("📝 Notunuzu yazın...")
@@ -1541,62 +1569,62 @@ Lütfen SADECE yukarıdaki notlara dayanarak soruyu yanıtla.
                 text = "🧠 **Hafıza & AI Soruları**\n\n• **Not Al:** Sadece yaz veya ses at, gerisini bana bırak.\n• **Soru Sor:** \"Geçen hafta ne demiştik?\", \"Video notumu bul\" gibi sorularla geçmişi sorgula.\n• **Arama:** /list komutuyla veya aşağıdaki 'Ara' butonuyla kelime bazlı arama yap."
                 kb = [[InlineKeyboardButton("🔍 Kelime İle Ara", callback_data=f"search_{user_id}"),
                        InlineKeyboardButton("🔙 Geri", callback_data="start_menu")]]
-                await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(kb), parse_mode='Markdown')
+                await self._update_ui(update, text, reply_markup=InlineKeyboardMarkup(kb), parse_mode='Markdown')
             elif target == "time":
                 text = "⏰ **Zaman & Planlama**\n\n• **Hatırlatıcı:** \"Yarın 10:00 toplantı\" yazman yeterli.\n• **Rutin:** /routine ile tekrarlanan görevler oluştur.\n• **Akıllı Hazırlık:** Önemli işlerde senin için otomatik hazırlık uyarıları kurarım."
                 kb = [[InlineKeyboardButton("📋 Bekleyenleri Listele", callback_data="list_all"),
                        InlineKeyboardButton("🔙 Geri", callback_data="start_menu")]]
-                await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(kb), parse_mode='Markdown')
+                await self._update_ui(update, text, reply_markup=InlineKeyboardMarkup(kb), parse_mode='Markdown')
             elif target == "tools":
                 text = "🛠️ **Yardımcı Araçlar**\n\n• 🎙️ **Sesli Mesaj:** Uzun sesleri anında metne çevirip özetlerim.\n• 🖼️ **Görsel Analiz:** Fotoğraf at, içindeki bilgileri not alayım.\n• 🗓️ **Google Takvim:** /auth ile bağla, her şey senkron kalsın."
                 kb = [[InlineKeyboardButton("🔙 Geri", callback_data="start_menu")]]
-                await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(kb), parse_mode='Markdown')
+                await self._update_ui(update, text, reply_markup=InlineKeyboardMarkup(kb), parse_mode='Markdown')
         elif data == "start_menu":
             await self.start(update, context) # Re-send main menu
         elif data == "list_all":
             await self.list_command(update, context)
         elif action == "reminder":
-            await query.edit_message_text(
+            await self._update_ui(update, 
                 "⏰ Hatırlatıcı eklemek için:\n\n/remind <zaman> <mesaj>\n\n"
                 "Örnek: /remind 15:30 Toplantı"
             )
         elif action == "routine":
-            await query.edit_message_text(
+            await self._update_ui(update, 
                 "🔄 Rutin eklemek için:\n\n/routine <sıklık> <saat> <mesaj>\n\n"
                 "Örnek: /routine günlük 09:00 Kahve"
             )
         elif action == "status":
             stats = self.storage.get_stats()
             reply = f"📊 **Durum**\n\n📝 Not: {stats['total_notes']}\n⏰ Hatırlatıcı: {stats['pending_reminders']}\n🔄 Rutin: {stats['active_routines']}"
-            await query.edit_message_text(reply, parse_mode='Markdown')
+            await self._update_ui(update, reply, parse_mode='Markdown')
         
         elif data == "clear_rem":
             count = self.storage.clear_all_reminders(user_id)
-            await query.edit_message_text(f"✅ {count} adet bekleyen hatırlatıcı temizlendi.")
+            await self._update_ui(update, f"✅ {count} adet bekleyen hatırlatıcı temizlendi.")
         
         elif data == "clear_ro":
             count = self.storage.clear_all_routines(user_id)
-            await query.edit_message_text(f"✅ {count} adet rutin temizlendi.")
+            await self._update_ui(update, f"✅ {count} adet rutin temizlendi.")
             
         elif data == "clear_cancel":
-            await query.edit_message_text("❌ İşlem iptal edildi.")
+            await self._update_ui(update, "❌ İşlem iptal edildi.")
         
         elif action == "canrem":
             # Hatırlatıcı iptal
             # format: canrem_rem_user_timestamp
             reminder_id = "_".join(parts[1:])
             if self.storage.delete_reminder(reminder_id):
-                await query.edit_message_text("❌ Hatırlatıcı iptal edildi.")
+                await self._update_ui(update, "❌ Hatırlatıcı iptal edildi.")
             else:
-                await query.edit_message_text("⚠️ Hatırlatıcı bulunamadı veya zaten silinmiş.")
+                await self._update_ui(update, "⚠️ Hatırlatıcı bulunamadı veya zaten silinmiş.")
         
         elif data == "clear_gcal_pharma":
             if not self.calendar.is_authenticated():
-                await query.edit_message_text("❌ Önce bota takviminizi bağlamanız lazım: /auth")
+                await self._update_ui(update, "❌ Önce bota takviminizi bağlamanız lazım: /auth")
                 return
             
             count = self.calendar.clear_events_by_query("İLAÇ")
-            await query.edit_message_text(f"✨ Takviminizdeki {count} adet ilaç hatırlatıcısı temizlendi!")
+            await self._update_ui(update, f"✨ Takviminizdeki {count} adet ilaç hatırlatıcısı temizlendi!")
         
         elif action == "snooze":
             # Erteleme: snooze_rem_user_timestamp_dakika
@@ -1605,9 +1633,9 @@ Lütfen SADECE yukarıdaki notlara dayanarak soruyu yanıtla.
             
             new_time = (get_now_utc() + timedelta(minutes=minutes)).isoformat()
             if self.storage.reschedule_reminder(rem_id, new_time):
-                await query.edit_message_text(f"⏳ {minutes} dakika ertelendi.")
+                await self._update_ui(update, f"⏳ {minutes} dakika ertelendi.")
             else:
-                await query.edit_message_text("⚠️ Hatırlatıcı bulunamadı veya güncellenemedi.")
+                await self._update_ui(update, "⚠️ Hatırlatıcı bulunamadı veya güncellenemedi.")
         
         # --- SUPPORT: Button Action Global Catch ---
         elif action:
@@ -2111,6 +2139,20 @@ def main():
     app.add_handler(MessageHandler(filters.PHOTO, bot.handle_photo))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, bot.handle_message))
     app.add_handler(CallbackQueryHandler(bot.button_callback))
+
+    # [UX] Register Bot Commands in Telegram Menu Button
+    async def post_init(application: Application):
+        from telegram import BotCommand
+        commands = [
+            BotCommand("menu", "Ana özellikleri gör"),
+            BotCommand("list", "Bekleyen hatırlatıcıları listele"),
+            BotCommand("auth", "Google Takvim'i bağla"),
+            BotCommand("clear", "Temizlik yap")
+        ]
+        await application.bot.set_my_commands(commands)
+        logger.info("[UX] Bot commands registered in Menu button")
+
+    app.post_init = post_init
 
     # Error handler - tüm hataları log'la
     async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE):
