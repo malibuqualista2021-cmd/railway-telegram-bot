@@ -1510,38 +1510,37 @@ Lütfen SADECE yukarıdaki notlara dayanarak soruyu yanıtla.
             voice = update.message.voice
             duration = voice.duration
 
-        # ===== DEBUG LOG =====
-        logger.info("=" * 60)
-        logger.info("=== VOICE MESSAGE RECEIVED ===")
-        logger.info(f"User ID: {user_id}")
-        logger.info(f"Duration: {duration}s")
-        logger.info(f"File ID: {voice.file_id}")
-        logger.info(f"File size: {voice.file_size} bytes")
-        logger.info(f"MIME type: {voice.mime_type}")
-        
-        # Environment check
-        deepgram_key = get_env('DEEPGRAM_API_KEY')
-        logger.info(f"DEEPGRAM_API_KEY exists: {bool(deepgram_key)}")
-        if deepgram_key:
-            logger.info(f"DEEPGRAM_API_KEY preview: {deepgram_key[:10]}...{deepgram_key[-4:]}")
-        else:
-            logger.error("DEEPGRAM_API_KEY is MISSING!")
-        logger.info("=" * 60)
+            # ===== DEBUG LOG =====
+            logger.info("=" * 60)
+            logger.info("=== VOICE MESSAGE RECEIVED ===")
+            logger.info(f"User ID: {user_id}")
+            logger.info(f"Duration: {duration}s")
+            logger.info(f"File ID: {voice.file_id}")
+            logger.info(f"File size: {voice.file_size} bytes")
+            logger.info(f"MIME type: {voice.mime_type}")
+            
+            # Environment check
+            deepgram_key = get_env('DEEPGRAM_API_KEY')
+            logger.info(f"DEEPGRAM_API_KEY exists: {bool(deepgram_key)}")
+            if deepgram_key:
+                logger.info(f"DEEPGRAM_API_KEY preview: {deepgram_key[:10]}...{deepgram_key[-4:]}")
+            else:
+                logger.error("DEEPGRAM_API_KEY is MISSING!")
+            logger.info("=" * 60)
 
-        # 10 dakikadan uzunsa reddet
-        if duration > 600:
-            await update.message.reply_text("⚠️ Ses kaydı çok uzun (max 10 dakika)")
-            return
+            # 10 dakikadan uzunsa reddet
+            if duration > 600:
+                await update.message.reply_text("⚠️ Ses kaydı çok uzun (max 10 dakika)")
+                return
 
-        # Çok kısa sesler için uyarı
-        if duration < 1:
-            await update.message.reply_text("⚠️ Ses kaydı çok kısa, en az 1 saniye olmalı")
-            return
+            # Çok kısa sesler için uyarı
+            if duration < 1:
+                await update.message.reply_text("⚠️ Ses kaydı çok kısa, en az 1 saniye olmalı")
+                return
 
-        await update.message.chat.send_action("record_voice")
-        status_msg = await update.message.reply_text("🎤 Ses işleniyor...")
+            await update.message.chat.send_action("record_voice")
+            status_msg = await update.message.reply_text("🎤 Ses işleniyor...")
 
-        try:
             # Ses dosyasını indir
             logger.info("[VOICE] Downloading audio file from Telegram...")
             new_file = await voice.get_file()
