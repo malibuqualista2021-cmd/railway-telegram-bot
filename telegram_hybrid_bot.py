@@ -575,6 +575,7 @@ class RailwayBot:
         self.groq = GroqAgent(get_env("GROQ_API_KEY"))
 
     async def start(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        logger.info(f"=== START COMMAND RECEIVED from {update.effective_user.id} ===")
         user_id = update.effective_user.id
         stats = storage.get_stats()
 
@@ -1116,6 +1117,14 @@ def main():
     app.add_handler(MessageHandler(filters.VOICE, bot.handle_voice))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, bot.handle_message))
     app.add_handler(CallbackQueryHandler(bot.button_callback))
+
+    # Error handler - tüm hataları log'la
+    async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE):
+        logger.error(f"Exception while handling an update: {context.error}")
+        if update:
+            logger.error(f"Update: {update}")
+
+    app.add_error_handler(error_handler)
 
     # Job queue - her dakika kontrol
     job_queue = app.job_queue
