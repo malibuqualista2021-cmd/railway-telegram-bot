@@ -23,7 +23,7 @@ from dateutil import parser, rrule
 from dateutil.relativedelta import relativedelta
 
 import requests
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, Voice
 from telegram.ext import Application, CommandHandler, MessageHandler, CallbackQueryHandler, filters, ContextTypes
 from telegram.ext import ContextTypes
 from groq import Groq
@@ -216,7 +216,8 @@ Kısa, öz ve dostça yanıtlar ver."""
 
     def __init__(self, api_key: str):
         self.client = Groq(api_key=api_key)
-        self.model = "llama-3.3-70b-versatile"
+        self.chat_model = "llama-3.3-70b-versatile"
+        self.whisper_model = "whisper-large-v3-turbo"
 
     def chat(self, text: str) -> Optional[str]:
         messages = [
@@ -225,7 +226,7 @@ Kısa, öz ve dostça yanıtlar ver."""
         ]
         try:
             response = self.client.chat.completions.create(
-                model=self.model,
+                model=self.chat_model,
                 messages=messages,
                 max_tokens=500
             )
@@ -233,6 +234,61 @@ Kısa, öz ve dostça yanıtlar ver."""
         except Exception as e:
             logger.error(f"Groq error: {e}")
             return None
+
+    def transcribe(self, audio_file: bytes) -> Optional[str]:
+        """Ses dosyasını metne çevir (Whisper)"""
+        import tempfile
+        try:
+            # Geçici dosya oluştur
+            with tempfile.NamedTemporaryFile(delete=False, suffix=".ogg") as tmp:
+                tmp.write(audio_file)
+                tmp_path = tmp.name
+
+            # Groq Whisper ile transkripsiyon
+            with open(tmp_path, "rb") as audio:
+                transcription = self.client.audio.transcriptions.create(
+                    file=(Path(tmp_path).name, audio.read()),
+                    model=self.whisper_model,
+                    language="tr",
+                    prompt="Türkçe konuşma"
+                )
+            return transcription.text
+        except Exception as e:
+            logger.error(f"Whisper error: {e}")
+            return None
+
+    def classify_intent(self, text: str) -> str:
+        """Metnin niyetini sınıflandır"""
+        system_prompt = """Sen bir asistan köprüsüsün. Kullanıcı mesajının niyetini sınıflandır ve SADECE şu kelimelerden birini döndür:
+
+- reminder: Kullanıcı gelecekte bir şey hatırlatmak istiyor (zaman ifade eder)
+- routine: Kullanıcı tekrarlayan bir rutin belirtiyor (her gün, her hafta vb.)
+- note: Sadece bilgi/not kaydediyor
+- chat: Sadece sohbet ediyor, soru soruyor
+
+Örnekler:
+"Yarın toplantı var" → reminder
+"Her sabah 9'da kahve" → routine
+"Toplantıda X kararı alındı" → note
+"Merhaba, nasılsın?" → chat
+"Toplantı ne zaman?" → chat"""
+
+        try:
+            response = self.client.chat.completions.create(
+                model=self.chat_model,
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": text}
+                ],
+                max_tokens=10,
+                temperature=0
+            )
+            intent = response.choices[0].message.content.strip().lower()
+            logger.info(f"Intent classified: {intent} for: {text[:50]}")
+            return intent
+        except Exception as e:
+            logger.error(f"Intent classification error: {e}")
+            return "note"  # Varsayılan
 
 
 # ==================== REMINDER HELPERS ====================
@@ -567,6 +623,136 @@ Sıklık seçenekleri:
             reply = f"📊 **Durum**\n\n📝 Not: {stats['total_notes']}\n⏰ Hatırlatıcı: {stats['pending_reminders']}\n🔄 Rutin: {stats['active_routines']}"
             await query.edit_message_text(reply, parse_mode='Markdown')
 
+    async def handle_voice(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Sesli mesaj işle - Whisper ile transkripsiyon + AI sınıflandırma"""
+        user_id = update.effective_user.id
+        voice = update.message.voice
+        duration = voice.duration
+
+        # 10 dakikadan uzunsa reddet
+        if duration > 600:
+            await update.message.reply_text("⚠️ Ses kaydı çok uzun (max 10 dakika)")
+            return
+
+        await update.message.chat.send_action("record_voice")
+        await update.message.reply_text("🎤 Ses işleniyor...")
+
+        try:
+            # Ses dosyasını indir
+            new_file = await voice.get_file()
+            audio_data = await new_file.download_as_bytearray()
+
+            # Whisper ile transkripsiyon
+            transcript = self.groq.transcribe(bytes(audio_data))
+
+            if not transcript:
+                await update.message.reply_text("❌ Ses anlaşılamadı, tekrar deneyin.")
+                return
+
+            logger.info(f"Transcript for {user_id}: {transcript[:100]}")
+
+            # AI ile niyet sınıflandırması
+            intent = self.groq.classify_intent(transcript)
+
+            # Niyete göre işlem
+            if intent == "reminder":
+                # Hatırlatıcıyı ayıkla ve oluştur
+                await self._process_reminder_from_voice(update, transcript)
+            elif intent == "routine":
+                await self._process_routine_from_voice(update, transcript)
+            elif intent == "note":
+                storage.add_note(user_id, f"[Ses] {transcript}", source="voice")
+                await update.message.reply_text(f"📝 Not alındı:\n\n{transcript}")
+            else:  # chat
+                ai_response = self.groq.chat(transcript)
+                if ai_response:
+                    await update.message.reply_text(f"🤖 **AI:**\n\n{ai_response}", parse_mode='Markdown')
+
+        except Exception as e:
+            logger.error(f"Voice processing error: {e}")
+            await update.message.reply_text(f"❌ İşlem hatası: {str(e)[:100]}")
+
+    async def _process_reminder_from_voice(self, update: Update, transcript: str):
+        """Sesten hatırlatıcı çıkar"""
+        user_id = update.effective_user.id
+
+        # AI ile zaman ve mesajı çıkar
+        prompt = f"""Bu metinden hatırlatıcı zamanı ve mesajını çıkar. JSON formatında döndür:
+{{"time": "HH:MM veya tarih", "message": "mesaj"}}
+
+Metin: {transcript}
+
+Sadece JSON döndür, başka bir şey yazma."""
+
+        try:
+            response = self.groq.client.chat.completions.create(
+                model=self.groq.chat_model,
+                messages=[{"role": "user", "content": prompt}],
+                response_format={"type": "json_object"},
+                max_tokens=200
+            )
+
+            import json
+            result = json.loads(response.choices[0].message.content)
+            time_str = result.get("time", "")
+            message = result.get("message", transcript)
+
+            if time_str:
+                remind_time = parse_reminder_time(time_str)
+                if remind_time:
+                    storage.add_reminder(user_id, message, remind_time)
+                    dt = parser.parse(remind_time)
+                    readable = dt.strftime("%d.%m.%Y %H:%M")
+                    await update.message.reply_text(
+                        f"⏰ Hatırlatıcı ayarlandı!\n\n{readable}\n📝 {message}"
+                    )
+                    return
+
+            # Zaman çıkarılamazsa tümünü not olarak kaydet
+            storage.add_note(user_id, f"[Ses] {transcript}", source="voice")
+            await update.message.reply_text(f"📝 Not alındı (zaman anlaşılamadı):\n\n{transcript}")
+
+        except Exception as e:
+            logger.error(f"Reminder extraction error: {e}")
+            storage.add_note(user_id, f"[Ses] {transcript}", source="voice")
+            await update.message.reply_text(f"📝 Not alındı:\n\n{transcript}")
+
+    async def _process_routine_from_voice(self, update: Update, transcript: str):
+        """Sesten rutin çıkar"""
+        user_id = update.effective_user.id
+
+        # AI ile rutini çıkar
+        prompt = f"""Bu metinden rutin sıklığını, saatini ve mesajını çıkar. JSON formatında döndür:
+{{"frequency": "günlük/haftalık/aylık/gün adı", "time": "HH:MM", "message": "mesaj"}}
+
+Metin: {transcript}
+
+Sadece JSON döndür."""
+
+        try:
+            response = self.groq.client.chat.completions.create(
+                model=self.groq.chat_model,
+                messages=[{"role": "user", "content": prompt}],
+                response_format={"type": "json_object"},
+                max_tokens=200
+            )
+
+            import json
+            result = json.loads(response.choices[0].message.content)
+            freq = result.get("frequency", "günlük")
+            time_str = result.get("time", "09:00")
+            message = result.get("message", transcript)
+
+            storage.add_routine(user_id, message, freq, time_str)
+            await update.message.reply_text(
+                f"🔄 Rutin ayarlandı!\n\n{freq.capitalize()} • {time_str}\n📝 {message}"
+            )
+
+        except Exception as e:
+            logger.error(f"Routine extraction error: {e}")
+            storage.add_note(user_id, f"[Ses] {transcript}", source="voice")
+            await update.message.reply_text(f"📝 Not alındı:\n\n{transcript}")
+
 
 # ==================== REMINDER CHECKER ====================
 async def check_reminders_job(app: Application):
@@ -682,6 +868,7 @@ def main():
     app.add_handler(CommandHandler("remind", bot.remind_command))
     app.add_handler(CommandHandler("routine", bot.routine_command))
     app.add_handler(CommandHandler("list", bot.list_command))
+    app.add_handler(MessageHandler(filters.VOICE, bot.handle_voice))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, bot.handle_message))
     app.add_handler(CallbackQueryHandler(bot.button_callback))
 
