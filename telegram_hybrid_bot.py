@@ -56,6 +56,17 @@ class Config:
 
 config = Config()
 
+# ==================== DEBUG: ENV VARIABLES ====================
+logger.info("=== ENVIRONMENT VARIABLES DEBUG ===")
+for key in sorted(os.environ.keys()):
+    if 'TOKEN' in key or 'KEY' in key or 'API' in key or 'GROQ' in key or 'DEEPGRAM' in key:
+        value = os.environ[key]
+        masked = value[:8] + "..." if len(value) > 8 else "***"
+        logger.info(f"{key} = {masked}")
+logger.info(f"Config.deepgram_key = {config.deepgram_key[:8] + '...' if config.deepgram_key else 'EMPTY'}")
+logger.info(f"Config.groq_key = {config.groq_key[:8] + '...' if config.groq_key else 'EMPTY'}")
+logger.info("====================================\n")
+
 
 # ==================== STORAGE ====================
 class RailwayStorage:
