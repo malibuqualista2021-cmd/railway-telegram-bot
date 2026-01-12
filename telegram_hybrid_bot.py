@@ -239,69 +239,159 @@ Kısa, öz ve dostça yanıtlar ver."""
             return None
 
     def transcribe(self, audio_file: bytes) -> Optional[str]:
-        """Ses dosyasını metne çevir (Deepgram - Ücretsiz 200dk/ay)"""
+        """
+        Ses dosyasını metne çevir (Deepgram API)
+        
+        Aksiyomatik Analiz:
+        - Telegram voice: OPUS codec, OGA/OGG container
+        - Deepgram: audio/ogg destekler, detect=true ile auto-detect
+        - Fallback: detect_language=false ile sadece Türkçe
+        """
         import tempfile
 
+        # ===== ADIM 1: API KEY KONTROLÜ =====
         deepgram_key = get_env("DEEPGRAM_API_KEY")
-        logger.info(f"[TRANSCRIBE] get_env returned: {deepgram_key[:10] if deepgram_key else 'NONE'}")
+        logger.info(f"[TRANSCRIBE-1] API Key check: {'EXISTS (' + deepgram_key[:10] + '...)' if deepgram_key else 'MISSING'}")
+        
         if not deepgram_key:
-            logger.warning("DEEPGRAM_API_KEY not set")
+            logger.error("[TRANSCRIBE-1] CRITICAL: DEEPGRAM_API_KEY is not set!")
             return None
 
-        try:
-            logger.info(f"Starting transcription, audio size: {len(audio_file)} bytes")
+        # ===== ADIM 2: AUDIO DATA VALİDASYONU =====
+        if not audio_file or len(audio_file) < 100:
+            logger.error(f"[TRANSCRIBE-2] Audio data invalid: {len(audio_file) if audio_file else 0} bytes")
+            return None
+        
+        logger.info(f"[TRANSCRIBE-2] Audio size: {len(audio_file)} bytes ({len(audio_file)/1024:.1f} KB)")
+        
+        # OGG magic bytes kontrolü (OggS)
+        if audio_file[:4] == b'OggS':
+            logger.info("[TRANSCRIBE-2] Audio format: Valid OGG container detected")
+        else:
+            logger.warning(f"[TRANSCRIBE-2] Audio format: Unknown (magic: {audio_file[:4]})")
 
-            # Geçici dosya oluştur
+        try:
+            # ===== ADIM 3: GEÇİCİ DOSYA =====
             with tempfile.NamedTemporaryFile(delete=False, suffix=".ogg") as tmp:
                 tmp.write(audio_file)
                 tmp_path = tmp.name
+            logger.info(f"[TRANSCRIBE-3] Temp file: {tmp_path}")
 
-            logger.info(f"Temp file created: {tmp_path}")
-
-            # Deepgram API - Türkçe dil desteği ile
-            url = "https://api.deepgram.com/v1/listen?language=tr&model=nova-2&smart_format=true"
+            # ===== ADIM 4: DEEPGRAM API ÇAĞRISI =====
+            # Parametreler:
+            # - model=nova-2: En iyi genel model
+            # - language=tr: Türkçe
+            # - smart_format=true: Noktalama işaretleri
+            # - punctuate=true: Ek noktalama
+            url = "https://api.deepgram.com/v1/listen"
+            params = {
+                "model": "nova-2",
+                "language": "tr",
+                "smart_format": "true",
+                "punctuate": "true"
+            }
+            
             headers = {
                 "Authorization": f"Token {deepgram_key}",
                 "Content-Type": "audio/ogg"
             }
 
+            logger.info(f"[TRANSCRIBE-4] Sending to Deepgram...")
+            logger.info(f"[TRANSCRIBE-4] URL: {url}")
+            logger.info(f"[TRANSCRIBE-4] Params: {params}")
+
             with open(tmp_path, "rb") as audio:
-                logger.info(f"Sending to Deepgram (URL: {url})")
-                logger.info(f"Authorization header: Token {deepgram_key[:10]}...")
+                audio_bytes = audio.read()
+                logger.info(f"[TRANSCRIBE-4] Sending {len(audio_bytes)} bytes...")
+                
                 response = requests.post(
                     url,
+                    params=params,
                     headers=headers,
-                    data=audio,
-                    timeout=30
+                    data=audio_bytes,
+                    timeout=60  # Timeout artırıldı
                 )
-                logger.info(f"Deepgram response status: {response.status_code}")
 
-            # Geçici dosyayı sil
+            logger.info(f"[TRANSCRIBE-4] Response status: {response.status_code}")
+            logger.info(f"[TRANSCRIBE-4] Response headers: {dict(response.headers)}")
+
+            # ===== ADIM 5: GEÇİCİ DOSYA TEMİZLİĞİ =====
             try:
                 os.unlink(tmp_path)
-            except:
-                pass
+            except Exception as e:
+                logger.warning(f"[TRANSCRIBE-5] Could not delete temp file: {e}")
 
+            # ===== ADIM 6: RESPONSE İŞLEME =====
             if response.status_code == 200:
                 result = response.json()
-                logger.info(f"Deepgram raw response: {json.dumps(result)[:500]}")
                 
-                # Deepgram API doğru format: results.channels[0].alternatives[0].transcript
+                # Ham response log (debug için)
+                response_str = json.dumps(result, ensure_ascii=False)
+                logger.info(f"[TRANSCRIBE-6] Raw response (first 800 chars): {response_str[:800]}")
+                
+                # Deepgram response yapısı:
+                # {
+                #   "results": {
+                #     "channels": [{
+                #       "alternatives": [{
+                #         "transcript": "metin",
+                #         "confidence": 0.95
+                #       }]
+                #     }]
+                #   }
+                # }
+                
                 try:
-                    text = result["results"]["channels"][0]["alternatives"][0]["transcript"].strip()
-                except (KeyError, IndexError) as e:
-                    logger.error(f"Deepgram response parse error: {e}")
-                    logger.error(f"Full response: {result}")
-                    text = ""
-                
-                logger.info(f"Transcription: {text[:100] if text else 'empty'}")
-                return text if text else None
+                    channels = result.get("results", {}).get("channels", [])
+                    if not channels:
+                        logger.error("[TRANSCRIBE-6] No channels in response")
+                        return None
+                    
+                    alternatives = channels[0].get("alternatives", [])
+                    if not alternatives:
+                        logger.error("[TRANSCRIBE-6] No alternatives in response")
+                        return None
+                    
+                    transcript = alternatives[0].get("transcript", "").strip()
+                    confidence = alternatives[0].get("confidence", 0)
+                    
+                    logger.info(f"[TRANSCRIBE-6] Transcript: '{transcript}'")
+                    logger.info(f"[TRANSCRIBE-6] Confidence: {confidence}")
+                    
+                    if not transcript:
+                        logger.warning("[TRANSCRIBE-6] Empty transcript - audio may be silence or unclear")
+                        return None
+                    
+                    return transcript
+                    
+                except (KeyError, IndexError, TypeError) as e:
+                    logger.error(f"[TRANSCRIBE-6] Parse error: {type(e).__name__}: {e}")
+                    logger.error(f"[TRANSCRIBE-6] Full response: {result}")
+                    return None
+                    
+            elif response.status_code == 401:
+                logger.error("[TRANSCRIBE-6] ERROR 401: Invalid API key!")
+                return None
+            elif response.status_code == 402:
+                logger.error("[TRANSCRIBE-6] ERROR 402: Payment required - free quota exceeded!")
+                return None
+            elif response.status_code == 400:
+                logger.error(f"[TRANSCRIBE-6] ERROR 400: Bad request - {response.text[:300]}")
+                return None
             else:
-                logger.error(f"Deepgram error: {response.status_code} - {response.text[:200]}")
+                logger.error(f"[TRANSCRIBE-6] ERROR {response.status_code}: {response.text[:300]}")
                 return None
 
+        except requests.exceptions.Timeout:
+            logger.error("[TRANSCRIBE] TIMEOUT: Deepgram did not respond in 60 seconds")
+            return None
+        except requests.exceptions.ConnectionError as e:
+            logger.error(f"[TRANSCRIBE] CONNECTION ERROR: {e}")
+            return None
         except Exception as e:
-            logger.error(f"Transcription error: {type(e).__name__}: {e}")
+            logger.error(f"[TRANSCRIBE] UNEXPECTED ERROR: {type(e).__name__}: {e}")
+            import traceback
+            logger.error(f"[TRANSCRIBE] Traceback: {traceback.format_exc()}")
             return None
 
     def classify_intent(self, text: str) -> str:
@@ -345,57 +435,85 @@ def parse_reminder_time(time_str: str) -> Optional[str]:
     Örnekler:
     - "15:30" → Bugün 15:30
     - "yarın 10:00" → Yarın 10:00
+    - "yarın 20:00" → Yarın 20:00
     - "Pazartesi 14:00" → Gelecek Pazartesi 14:00
     - "2026-01-15 09:00" → O tarih
     """
+    import re
+    
+    logger.info(f"[PARSE_TIME] Input: '{time_str}'")
+    
     try:
         time_str = time_str.strip()
         now = datetime.now()
+        
+        # Saat pattern'i bul (HH:MM formatı)
+        time_pattern = re.search(r'(\d{1,2}):(\d{2})', time_str)
+        
+        if time_pattern:
+            hour = int(time_pattern.group(1))
+            minute = int(time_pattern.group(2))
+            logger.info(f"[PARSE_TIME] Found time: {hour:02d}:{minute:02d}")
+        else:
+            # Saat bulunamadı, varsayılan kullan
+            hour, minute = 9, 0
+            logger.info(f"[PARSE_TIME] No time found, using default: {hour:02d}:{minute:02d}")
 
-        # "HH:MM" format → bugün
-        if ":" in time_str and len(time_str) <= 5:
-            target = now.replace(hour=int(time_str.split(":")[0]),
-                               minute=int(time_str.split(":")[1]),
-                               second=0, microsecond=0)
-            if target < now:
-                target += timedelta(days=1)
+        time_str_lower = time_str.lower()
+
+        # "yarın" kontrolü
+        if "yarın" in time_str_lower:
+            target = now + timedelta(days=1)
+            target = target.replace(hour=hour, minute=minute, second=0, microsecond=0)
+            logger.info(f"[PARSE_TIME] 'yarın' detected, target: {target.isoformat()}")
             return target.isoformat()
 
-        # "yarın HH:MM"
-        if "yarın" in time_str.lower():
-            time_part = time_str.lower().replace("yarın", "").strip()
-            if ":" in time_part:
-                hour, minute = map(int, time_part.split(":"))
-                target = now + timedelta(days=1)
-                target = target.replace(hour=hour, minute=minute, second=0, microsecond=0)
-                return target.isoformat()
+        # "bugün" kontrolü
+        if "bugün" in time_str_lower:
+            target = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
+            if target < now:
+                target += timedelta(days=1)
+            logger.info(f"[PARSE_TIME] 'bugün' detected, target: {target.isoformat()}")
+            return target.isoformat()
 
         # Gün isimleri (Pazartesi, Salı, ...)
         days_tr = {
             "pazartesi": 0, "salı": 1, "çarşamba": 2, "perşembe": 3,
             "cuma": 4, "cumartesi": 5, "pazar": 6
         }
-        for day_tr, day_en in days_tr.items():
-            if day_tr in time_str.lower():
-                time_part = time_str.lower().replace(day_tr, "").strip()
-                hour, minute = 9, 0  # varsayılan
-                if ":" in time_part:
-                    hour, minute = map(int, time_part.split(":"))
-                # Bir sonraki o günü bul
+        for day_tr, day_idx in days_tr.items():
+            if day_tr in time_str_lower:
                 current_day = now.weekday()
-                days_ahead = (day_en - current_day) % 7
+                days_ahead = (day_idx - current_day) % 7
                 if days_ahead == 0:
                     days_ahead = 7
                 target = now + timedelta(days=days_ahead)
                 target = target.replace(hour=hour, minute=minute, second=0, microsecond=0)
+                logger.info(f"[PARSE_TIME] '{day_tr}' detected, target: {target.isoformat()}")
                 return target.isoformat()
 
-        # ISO format veya diğer formatlar
-        target = parser.parse(time_str, fuzzy=True)
+        # Sadece saat varsa (HH:MM) → bugün veya yarın
+        if time_pattern and len(time_str) <= 10:
+            target = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
+            if target < now:
+                target += timedelta(days=1)
+            logger.info(f"[PARSE_TIME] Time only, target: {target.isoformat()}")
+            return target.isoformat()
+
+        # dateutil ile parse etmeyi dene
+        logger.info(f"[PARSE_TIME] Trying dateutil parser...")
+        target = parser.parse(time_str, fuzzy=True, dayfirst=True)
+        
+        # Geçmiş tarihse yarına al
+        if target < now:
+            if target.date() == now.date():
+                target += timedelta(days=1)
+        
+        logger.info(f"[PARSE_TIME] dateutil result: {target.isoformat()}")
         return target.isoformat()
 
     except Exception as e:
-        logger.error(f"Time parse error: {e}")
+        logger.error(f"[PARSE_TIME] Error parsing '{time_str}': {type(e).__name__}: {e}")
         return None
 
 
@@ -677,54 +795,80 @@ Sıklık seçenekleri:
         voice = update.message.voice
         duration = voice.duration
 
-        # Debug log
-        logger.info(f"=== VOICE MESSAGE RECEIVED ===")
-        logger.info(f"User ID: {user_id}, Duration: {duration}s")
-        logger.info(f"get_env(DEEPGRAM_API_KEY) exists: {bool(get_env('DEEPGRAM_API_KEY'))}")
-        logger.info(f"Key preview: {get_env('DEEPGRAM_API_KEY', 'MISSING')[:10]}...")
+        # ===== DEBUG LOG =====
+        logger.info("=" * 60)
+        logger.info("=== VOICE MESSAGE RECEIVED ===")
+        logger.info(f"User ID: {user_id}")
+        logger.info(f"Duration: {duration}s")
+        logger.info(f"File ID: {voice.file_id}")
+        logger.info(f"File size: {voice.file_size} bytes")
+        logger.info(f"MIME type: {voice.mime_type}")
+        
+        # Environment check
+        deepgram_key = get_env('DEEPGRAM_API_KEY')
+        logger.info(f"DEEPGRAM_API_KEY exists: {bool(deepgram_key)}")
+        if deepgram_key:
+            logger.info(f"DEEPGRAM_API_KEY preview: {deepgram_key[:10]}...{deepgram_key[-4:]}")
+        else:
+            logger.error("DEEPGRAM_API_KEY is MISSING!")
+        logger.info("=" * 60)
 
         # 10 dakikadan uzunsa reddet
         if duration > 600:
             await update.message.reply_text("⚠️ Ses kaydı çok uzun (max 10 dakika)")
             return
 
+        # Çok kısa sesler için uyarı
+        if duration < 1:
+            await update.message.reply_text("⚠️ Ses kaydı çok kısa, en az 1 saniye olmalı")
+            return
+
         await update.message.chat.send_action("record_voice")
-        await update.message.reply_text("🎤 Ses işleniyor...")
+        status_msg = await update.message.reply_text("🎤 Ses işleniyor...")
 
         try:
             # Ses dosyasını indir
+            logger.info("[VOICE] Downloading audio file from Telegram...")
             new_file = await voice.get_file()
             audio_data = await new_file.download_as_bytearray()
 
-            logger.info(f"Audio file downloaded: {len(audio_data)} bytes")
+            logger.info(f"[VOICE] Downloaded: {len(audio_data)} bytes ({len(audio_data)/1024:.1f} KB)")
 
-            # Deepgram ile transkripsiyon
-            # Önce API key kontrol et
-            api_key_check = get_env('DEEPGRAM_API_KEY')
-            logger.info(f"=== BEFORE TRANSCRIBE ===")
-            logger.info(f"DEEPGRAM_API_KEY check: {api_key_check[:10] if api_key_check else 'MISSING'}")
-            logger.info(f"os.environ direct check: {os.getenv('DEEPGRAM_API_KEY', 'MISSING')[:10]}")
-
-            transcript = self.groq.transcribe(bytes(audio_data))
-
-            logger.info(f"Transcript result: {transcript if transcript else 'NONE'}")
-
-            if not transcript:
-                await update.message.reply_text("❌ Ses anlaşılamadı (teknik sorun)")
-                # API key yoksa bilgi ver - tekrar kontrol et
-                after_check = get_env('DEEPGRAM_API_KEY')
-                logger.info(f"=== AFTER TRANSCRIBE FAILED ===")
-                logger.info(f"API key now: {after_check[:10] if after_check else 'MISSING'}")
+            # Audio data kontrolü
+            if len(audio_data) < 100:
+                logger.error(f"[VOICE] Audio data too small: {len(audio_data)} bytes")
+                await status_msg.edit_text("❌ Ses dosyası indirilemedi")
                 return
 
-            logger.info(f"Transcript for {user_id}: {transcript[:100]}")
+            # Deepgram ile transkripsiyon
+            logger.info("[VOICE] Starting transcription...")
+            transcript = self.groq.transcribe(bytes(audio_data))
+
+            logger.info(f"[VOICE] Transcription result: '{transcript}'" if transcript else "[VOICE] Transcription returned None")
+
+            if not transcript:
+                # Detaylı hata mesajı
+                error_msg = "❌ Ses anlaşılamadı\n\n"
+                error_msg += "Olası nedenler:\n"
+                error_msg += "• Ses çok kısa veya sessiz\n"
+                error_msg += "• Arka plan gürültüsü fazla\n"
+                error_msg += "• Mikrofon sorunu\n\n"
+                error_msg += "💡 Daha uzun ve net konuşmayı deneyin"
+                
+                await status_msg.edit_text(error_msg)
+                return
+
+            logger.info(f"[VOICE] SUCCESS! Transcript for user {user_id}: {transcript[:100]}")
+
+            # Başarılı transkripsiyon mesajı sil
+            await status_msg.delete()
 
             # AI ile niyet sınıflandırması
             intent = self.groq.classify_intent(transcript)
+            logger.info(f"[VOICE] Intent classified as: {intent}")
 
             # Niyete göre işlem
             if intent == "reminder":
-                # Hatırlatıcıyı ayıkla ve oluştur
                 await self._process_reminder_from_voice(update, transcript)
             elif intent == "routine":
                 await self._process_routine_from_voice(update, transcript)
@@ -737,24 +881,32 @@ Sıklık seçenekleri:
                     await update.message.reply_text(f"🤖 **AI:**\n\n{ai_response}", parse_mode='Markdown')
 
         except Exception as e:
-            logger.error(f"Voice processing error: {type(e).__name__}: {e}")
+            logger.error(f"[VOICE] EXCEPTION: {type(e).__name__}: {e}")
             import traceback
-            logger.error(f"Traceback: {traceback.format_exc()}")
-            await update.message.reply_text(f"❌ İşlem hatası: {str(e)[:100]}")
+            logger.error(f"[VOICE] Traceback:\n{traceback.format_exc()}")
+            await status_msg.edit_text(f"❌ İşlem hatası: {type(e).__name__}")
 
     async def _process_reminder_from_voice(self, update: Update, transcript: str):
         """Sesten hatırlatıcı çıkar"""
         user_id = update.effective_user.id
+        logger.info(f"[REMINDER] Processing reminder from voice for user {user_id}")
+        logger.info(f"[REMINDER] Transcript: {transcript}")
 
         # AI ile zaman ve mesajı çıkar
         prompt = f"""Bu metinden hatırlatıcı zamanı ve mesajını çıkar. JSON formatında döndür:
-{{"time": "HH:MM veya tarih", "message": "mesaj"}}
+{{"time": "YYYY-MM-DD HH:MM veya yarın HH:MM veya HH:MM", "message": "mesaj"}}
+
+Örnekler:
+- "yarın akşam 8'de spor" → {{"time": "yarın 20:00", "message": "spor yapmam lazım"}}
+- "saat 3'te toplantı" → {{"time": "15:00", "message": "toplantı"}}
+- "pazartesi 9'da doktor" → {{"time": "Pazartesi 09:00", "message": "doktor randevusu"}}
 
 Metin: {transcript}
 
 Sadece JSON döndür, başka bir şey yazma."""
 
         try:
+            logger.info("[REMINDER] Calling Groq API to extract time...")
             response = self.groq.client.chat.completions.create(
                 model=self.groq.chat_model,
                 messages=[{"role": "user", "content": prompt}],
@@ -762,28 +914,48 @@ Sadece JSON döndür, başka bir şey yazma."""
                 max_tokens=200
             )
 
+            raw_content = response.choices[0].message.content
+            logger.info(f"[REMINDER] Groq raw response: {raw_content}")
+
             import json
-            result = json.loads(response.choices[0].message.content)
+            result = json.loads(raw_content)
             time_str = result.get("time", "")
             message = result.get("message", transcript)
 
+            logger.info(f"[REMINDER] Extracted time: '{time_str}'")
+            logger.info(f"[REMINDER] Extracted message: '{message}'")
+
             if time_str:
+                logger.info(f"[REMINDER] Parsing time: {time_str}")
                 remind_time = parse_reminder_time(time_str)
+                logger.info(f"[REMINDER] Parsed remind_time: {remind_time}")
+                
                 if remind_time:
                     storage.add_reminder(user_id, message, remind_time)
                     dt = parser.parse(remind_time)
                     readable = dt.strftime("%d.%m.%Y %H:%M")
+                    logger.info(f"[REMINDER] SUCCESS! Reminder set for {readable}")
                     await update.message.reply_text(
-                        f"⏰ Hatırlatıcı ayarlandı!\n\n{readable}\n📝 {message}"
+                        f"⏰ Hatırlatıcı ayarlandı!\n\n📅 {readable}\n📝 {message}"
                     )
                     return
+                else:
+                    logger.warning(f"[REMINDER] parse_reminder_time returned None for: {time_str}")
 
             # Zaman çıkarılamazsa tümünü not olarak kaydet
+            logger.info("[REMINDER] Could not parse time, saving as note")
             storage.add_note(user_id, f"[Ses] {transcript}", source="voice")
             await update.message.reply_text(f"📝 Not alındı (zaman anlaşılamadı):\n\n{transcript}")
 
+        except json.JSONDecodeError as e:
+            logger.error(f"[REMINDER] JSON parse error: {e}")
+            logger.error(f"[REMINDER] Raw content was: {raw_content}")
+            storage.add_note(user_id, f"[Ses] {transcript}", source="voice")
+            await update.message.reply_text(f"📝 Not alındı:\n\n{transcript}")
         except Exception as e:
-            logger.error(f"Reminder extraction error: {e}")
+            logger.error(f"[REMINDER] Unexpected error: {type(e).__name__}: {e}")
+            import traceback
+            logger.error(f"[REMINDER] Traceback: {traceback.format_exc()}")
             storage.add_note(user_id, f"[Ses] {transcript}", source="voice")
             await update.message.reply_text(f"📝 Not alındı:\n\n{transcript}")
 
