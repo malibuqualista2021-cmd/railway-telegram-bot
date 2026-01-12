@@ -217,7 +217,7 @@ Kısa, öz ve dostça yanıtlar ver."""
     def __init__(self, api_key: str):
         self.client = Groq(api_key=api_key)
         self.chat_model = "llama-3.3-70b-versatile"
-        self.whisper_model = "whisper-large-v3-turbo"
+        self.whisper_model = "whisper-large-v3"  # Groq'un desteklediği model
 
     def chat(self, text: str) -> Optional[str]:
         messages = [
@@ -238,23 +238,39 @@ Kısa, öz ve dostça yanıtlar ver."""
     def transcribe(self, audio_file: bytes) -> Optional[str]:
         """Ses dosyasını metne çevir (Whisper)"""
         import tempfile
+        import os
+
         try:
+            logger.info(f"Starting transcription, audio size: {len(audio_file)} bytes")
+
             # Geçici dosya oluştur
             with tempfile.NamedTemporaryFile(delete=False, suffix=".ogg") as tmp:
                 tmp.write(audio_file)
                 tmp_path = tmp.name
 
+            logger.info(f"Temp file created: {tmp_path}")
+
             # Groq Whisper ile transkripsiyon
             with open(tmp_path, "rb") as audio:
+                logger.info(f"Sending to Groq Whisper, model: {self.whisper_model}")
                 transcription = self.client.audio.transcriptions.create(
                     file=(Path(tmp_path).name, audio.read()),
-                    model=self.whisper_model,
-                    language="tr",
-                    prompt="Türkçe konuşma"
+                    model=self.whisper_model
+                    # language ve prompt kaldırıldı - otomatik tespit daha iyi
                 )
-            return transcription.text
+
+            logger.info(f"Transcription result: {transcription.text[:100] if transcription.text else 'empty'}")
+
+            # Geçici dosyayı sil
+            try:
+                os.unlink(tmp_path)
+            except:
+                pass
+
+            return transcription.text if transcription and transcription.text else None
+
         except Exception as e:
-            logger.error(f"Whisper error: {e}")
+            logger.error(f"Whisper error: {type(e).__name__}: {e}")
             return None
 
     def classify_intent(self, text: str) -> str:
