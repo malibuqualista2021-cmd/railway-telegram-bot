@@ -13,3 +13,6 @@ aiohttp==3.9.1
 # Flask API (Sync Bridge)
 flask==3.0.0
 flask-cors==4.0.0
+
+# Date parsing for reminders
+python-dateutil==2.8.2
