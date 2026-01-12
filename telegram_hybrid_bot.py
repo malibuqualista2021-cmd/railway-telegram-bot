@@ -241,9 +241,9 @@ Kısa, öz ve dostça yanıtlar ver."""
     def transcribe(self, audio_file: bytes) -> Optional[str]:
         """Ses dosyasını metne çevir (Deepgram - Ücretsiz 200dk/ay)"""
         import tempfile
-        import os
 
         deepgram_key = get_env("DEEPGRAM_API_KEY")
+        logger.info(f"[TRANSCRIBE] get_env returned: {deepgram_key[:10] if deepgram_key else 'NONE'}")
         if not deepgram_key:
             logger.warning("DEEPGRAM_API_KEY not set")
             return None
@@ -690,15 +690,22 @@ Sıklık seçenekleri:
             logger.info(f"Audio file downloaded: {len(audio_data)} bytes")
 
             # Deepgram ile transkripsiyon
+            # Önce API key kontrol et
+            api_key_check = get_env('DEEPGRAM_API_KEY')
+            logger.info(f"=== BEFORE TRANSCRIBE ===")
+            logger.info(f"DEEPGRAM_API_KEY check: {api_key_check[:10] if api_key_check else 'MISSING'}")
+            logger.info(f"os.environ direct check: {os.getenv('DEEPGRAM_API_KEY', 'MISSING')[:10]}")
+
             transcript = self.groq.transcribe(bytes(audio_data))
 
             logger.info(f"Transcript result: {transcript if transcript else 'NONE'}")
 
             if not transcript:
                 await update.message.reply_text("❌ Ses anlaşılamadı (teknik sorun)")
-                # API key yoksa bilgi ver
-                if not get_env('DEEPGRAM_API_KEY'):
-                    await update.message.reply_text("⚠️ API Key eksik, Railway'e eklenmeli")
+                # API key yoksa bilgi ver - tekrar kontrol et
+                after_check = get_env('DEEPGRAM_API_KEY')
+                logger.info(f"=== AFTER TRANSCRIBE FAILED ===")
+                logger.info(f"API key now: {after_check[:10] if after_check else 'MISSING'}")
                 return
 
             logger.info(f"Transcript for {user_id}: {transcript[:100]}")
