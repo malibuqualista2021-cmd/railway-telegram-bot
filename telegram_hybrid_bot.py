@@ -1004,24 +1004,34 @@ Sıklık seçenekleri:
         logger.info(f"[REMINDER] Processing reminder from voice for user {user_id}")
         logger.info(f"[REMINDER] Transcript: {transcript}")
 
-        # AI ile zaman ve mesajı çıkar
-        now_str = get_now_local().strftime("%Y-%m-%d %H:%M")
-        prompt = f"""Sistem Zamanı: {now_str}
-Bu metinden hatırlatıcı zamanı ve mesajını çıkar. JSON formatında döndür:
-{{"time": "YYYY-MM-DD HH:MM", "message": "mesaj"}}
+        # AY İSİMLERİ (Ambiyans giderme)
+        tr_months = {
+            1: "Ocak", 2: "Şubat", 3: "Mart", 4: "Nisan", 5: "Mayıs", 6: "Haziran",
+            7: "Temmuz", 8: "Ağustos", 9: "Eylül", 10: "Ekim", 11: "Kasım", 12: "Aralık"
+        }
+        
+        # Ambiguity removal: Use words for months
+        now_str_readable = f"{now_local.day} {tr_months[now_local.month]} {now_local.year} {now_local.strftime('%A %H:%M')}"
+        now_iso = now_local.strftime("%Y-%m-%d %H:%M")
+        
+        logger.info(f"[REMINDER] Context Time: {now_str_readable}")
 
-ÖNEMLİ: 
-1. Zamanı mutlaka sistem zamanını baz alarak YYYY-MM-DD HH:MM formatında hesapla.
-2. "Beni ... uyar", "... hatırlat" gibi kısımları mesajdan temizle.
-3. Mesajı kısa ve öz tut.
+        prompt = f"""Şu anki zaman: {now_str_readable} (ISO: {now_iso})
+Kullanıcı sesi: "{transcript}"
 
-Örnekler:
-- "yarın akşam 8'de spor" → {{"time": "2026-01-13 20:00", "message": "spor"}}
-- "10 dakika sonra toplantı" ({now_str} ise) → {{"time": "2026-01-12 05:52", "message": "toplantı"}}
+Bu ifadeden hatırlatıcı zamanını ve mesajını çıkar. JSON formatında dön:
+{{
+  "time": "YYYY-MM-DD HH:MM",
+  "message": "mesaj",
+  "is_relative": true/false (Dakika, saat, gün sonra gibi ifadeler varsa true)
+}}
 
-Metin: {transcript}
+KRİTİK KURALLAR:
+1. Bugün {now_local.day}. gündeyiz, ay {now_local.month}. ay ({tr_months[now_local.month]}).
+2. Karıştırma: 12.01 (12 Ocak) ile 01.12 (1 Aralık) farklıdır. Mutlaka ISO (YYYY-MM-DD) kullan.
+3. Eğer kullanıcı "1 dakika sonra", "yarım saat sonra" gibi nispeten küçük bir süre belirtiyorsa, gün ve ayı ASLA değiştirme.
 
-Sadece JSON döndür, başka bir şey yazma."""
+Sadece JSON döndür."""
 
         try:
             logger.info("[REMINDER] Calling Groq API...")
