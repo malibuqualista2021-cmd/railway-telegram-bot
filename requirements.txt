@@ -1,5 +1,8 @@
-# Telegram Bot
-python-telegram-bot==20.7
+# Telegram Bot (with job-queue)
+python-telegram-bot[job-queue]==20.7
+
+# APScheduler for job queue
+apscheduler==3.10.4
 
 # Groq API
 groq==0.4.1
