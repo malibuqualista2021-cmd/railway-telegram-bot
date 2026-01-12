@@ -18,6 +18,7 @@ import threading
 import asyncio
 import tempfile
 import shutil
+from google_calendar_mgr import GoogleCalendarManager
 import pytz
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -748,6 +749,25 @@ class RailwayBot:
             logger.info(f"[DEBUG] GroqAgent init with key: {groq_key[:10] if groq_key else 'NONE'}...")
             self.groq = GroqAgent(groq_key)
             logger.info("[DEBUG] GroqAgent initialized successfully")
+            
+            # Google Calendar
+            google_creds_json = get_env("GOOGLE_CREDENTIALS")
+            google_token_json = get_env("GOOGLE_TOKEN")
+            
+            if google_creds_json:
+                # Env var üzerinden başlat
+                logger.info("Initializing Google Calendar from environment variables")
+                self.calendar = GoogleCalendarManager(google_creds_json, google_token_json, is_path=False)
+            else:
+                # Dosya üzerinden başlat (Fallback)
+                creds_path = os.path.join(os.path.dirname(__file__), "credentials.json")
+                storage_dir = get_env("RAILWAY_VOLUME_URL", "/data/storage")
+                token_path = os.path.join(storage_dir, "token.json")
+                
+                if not os.path.exists(token_path) and os.path.exists("token.json"):
+                    token_path = "token.json"
+                
+                self.calendar = GoogleCalendarManager(creds_path, token_path, is_path=True)
         except Exception as e:
             logger.error(f"[ERROR] GroqAgent init failed: {e}")
             raise
@@ -919,6 +939,7 @@ Sıklık seçenekleri:
         keyboard = [
             [InlineKeyboardButton("⏰ Tüm Hatırlatıcıları Sil", callback_data="clear_rem")],
             [InlineKeyboardButton("🔄 Tüm Rutinleri Sil", callback_data="clear_ro")],
+            [InlineKeyboardButton("📅 Takvimi Temizle (İlaç)", callback_data="clear_gcal_pharma")],
             [InlineKeyboardButton("❌ İptal", callback_data="clear_cancel")]
         ]
         await update.message.reply_text(
@@ -927,9 +948,35 @@ Sıklık seçenekleri:
             parse_mode='Markdown'
         )
 
+    async def auth_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """/auth - Google Calendar yetkilendirme"""
+        if self.calendar.is_authenticated():
+            await update.message.reply_text("✅ Google Takvim zaten bağlı!")
+            return
+
+        auth_url = self.calendar.get_auth_url()
+        reply = (
+            "🔗 **Google Takvim Bağlantısı**\n\n"
+            "1. [Buraya tıklayarak giriş yapın](" + auth_url + ")\n"
+            "2. Çıkan ekranda izinleri onaylayın.\n"
+            "3. Tarayıcıda 'bağlanılamıyor' (localhost) hatası alacaksınız, sorun değil.\n"
+            "4. Adres çubuğundaki **TÜM linki** buraya yapıştırıp bana gönderin."
+        )
+        await update.message.reply_text(reply, parse_mode='Markdown')
+
     async def handle_message(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         user_id = update.effective_user.id
         text = update.message.text
+
+        # Google Auth linki mi?
+        if "localhost" in text and "code=" in text:
+            try:
+                self.calendar.finalize_auth(text)
+                await update.message.reply_text("✅ Google Takvim başarıyla bağlandı! Artık hatırlatıcılar otomatik senkronize edilecek.")
+                return
+            except Exception as e:
+                await update.message.reply_text(f"❌ Bağlantı hatası: {e}")
+                return
 
         await update.message.chat.send_action("typing")
 
@@ -1027,6 +1074,14 @@ Lütfen SADECE yukarıdaki notlara dayanarak soruyu yanıtla.
                 await query.edit_message_text("❌ Hatırlatıcı iptal edildi.")
             else:
                 await query.edit_message_text("⚠️ Hatırlatıcı bulunamadı veya zaten silinmiş.")
+        
+        elif data == "clear_gcal_pharma":
+            if not self.calendar.is_authenticated():
+                await query.edit_message_text("❌ Önce bota takviminizi bağlamanız lazım: /auth")
+                return
+            
+            count = self.calendar.clear_events_by_query("İLAÇ")
+            await query.edit_message_text(f"✨ Takviminizdeki {count} adet ilaç hatırlatıcısı temizlendi!")
         
         elif action == "snooze":
             # Erteleme: snooze_remID_dakika
@@ -1278,6 +1333,14 @@ Sadece JSON döndür."""
                     reminder_id = storage.add_reminder(user_id, message, remind_time)
                     keyboard = [[InlineKeyboardButton("❌ İptal Et", callback_data=f"canrem_{reminder_id}")]]
 
+                    # Google Calendar Sync
+                    if self.calendar.is_authenticated():
+                        try:
+                            self.calendar.add_event(f"⏰ {message}", remind_time)
+                            logger.info(f"Synced to GCal: {message}")
+                        except Exception as e:
+                            logger.error(f"GCal Sync error: {e}")
+
                     await update.message.reply_text(
                         f"✅ Hatırlatıcı ayarlandı!\n\n📅 {readable}\n📝 {message}",
                         reply_markup=InlineKeyboardMarkup(keyboard)
@@ -1525,6 +1588,7 @@ def main():
     app.add_handler(CommandHandler("routine", bot.routine_command))
     app.add_handler(CommandHandler("list", bot.list_command))
     app.add_handler(CommandHandler("clear", bot.clear_command))
+    app.add_handler(CommandHandler("auth", bot.auth_command))
     app.add_handler(MessageHandler(filters.VOICE, bot.handle_voice))
     app.add_handler(MessageHandler(filters.PHOTO, bot.handle_photo))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, bot.handle_message))

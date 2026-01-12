@@ -18,8 +18,8 @@ COPY requirements.txt .
 # Paketleri yükle
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Bot kodunu kopyala
-COPY telegram_hybrid_bot.py .
+# Bot kodunu ve bağımlı dosyaları kopyala
+COPY . .
 
 # Persistent storage dizini oluştur
 RUN mkdir -p /data/storage

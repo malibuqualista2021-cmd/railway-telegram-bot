@@ -26,6 +26,14 @@ ENV/
 # Logs
 *.log
 
+# Credentials
+credentials.json
+token.json
+auth.json
+auth_link.txt
+finalize_auth_automated.py
+get_auth_url*.py
+
 # OS
 .DS_Store
 Thumbs.db
