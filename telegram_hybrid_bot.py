@@ -997,7 +997,7 @@ Sıklık seçenekleri:
         logger.info(f"[REMINDER] Transcript: {transcript}")
 
         # AI ile zaman ve mesajı çıkar
-        now_str = get_now_local().strftime("%d.%m.%Y %H:%M")
+        now_str = get_now_local().strftime("%Y-%m-%d %H:%M")
         prompt = f"""Sistem Zamanı: {now_str}
 Bu metinden hatırlatıcı zamanı ve mesajını çıkar. JSON formatında döndür:
 {{"time": "YYYY-MM-DD HH:MM", "message": "mesaj"}}
@@ -1080,7 +1080,7 @@ Sadece JSON döndür, başka bir şey yazma."""
         logger.info(f"[ROUTINE] Processing routine from voice for user {user_id}")
 
         # AI ile rutini çıkar
-        now_str = get_now_local().strftime("%d.%m.%Y %H:%M")
+        now_str = get_now_local().strftime("%Y-%m-%d %H:%M")
         prompt = f"""Sistem Zamanı: {now_str}
 Bu metinden rutin sıklığını, saatini ve mesajını çıkar. JSON formatında döndür:
 {{"frequency": "günlük/haftalık/aylık/gün adı", "time": "HH:MM", "message": "mesaj"}}
