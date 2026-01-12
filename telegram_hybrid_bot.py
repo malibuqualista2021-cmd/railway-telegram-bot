@@ -1,18 +1,20 @@
 #!/usr/bin/env python3
 """
-Telegram Asistan - Railway Cloud Bot
+Telegram Asistan - Railway Cloud Bot + Sync Bridge
 PC kapalıyken Railway'de çalışır, notları depolar
-PC açılınca yerel sistem senkronize olur
+Sync API ile yerel PC ile senkronize olur
 
-Environment Variables (Railway'de ayarlayın):
+Environment Variables:
 - TELEGRAM_TOKEN: Telegram bot token
 - GROQ_API_KEY: Groq API key
-- RAILWAY_VOLUME_URL: Persistent storage path (opsiyonel)
+- SYNC_TOKEN: Senkronizasyon için güvenlik token'ı
+- RAILWAY_VOLUME_URL: Persistent storage path
 """
 import os
 import sys
 import json
 import logging
+import threading
 import asyncio
 from datetime import datetime
 from pathlib import Path
@@ -22,6 +24,10 @@ import requests
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, MessageHandler, CallbackQueryHandler, filters, ContextTypes
 from groq import Groq
+
+# Flask API için
+from flask import Flask, request, jsonify
+from flask_cors import CORS
 
 # Logging
 logging.basicConfig(
@@ -34,27 +40,14 @@ logger = logging.getLogger(__name__)
 
 # ==================== CONFIG ====================
 class Config:
-    """Environment variable based config"""
-
-    # Required
     telegram_token: str = os.getenv("TELEGRAM_TOKEN", "")
     groq_key: str = os.getenv("GROQ_API_KEY", "")
-
-    # Optional - Railway storage
-    # Railway volume: /data/storage
+    sync_token: str = os.getenv("SYNC_TOKEN", "default-sync-token-change-me")
     storage_path: str = os.getenv("RAILWAY_VOLUME_URL", "/data/storage")
-
-    # Yerel sistem kontrolü için
-    # Bu Railway'de çalışmayacak ama senkronizasyon için gerekli
-    local_webhook_url: str = os.getenv("LOCAL_WEBHOOK_URL", "")
+    port: int = int(os.getenv("PORT", "5000"))
 
     def validate(self) -> bool:
-        """Validate config"""
-        if not self.telegram_token:
-            logger.error("TELEGRAM_TOKEN gerekli!")
-            return False
-        if not self.groq_key:
-            logger.error("GROQ_API_KEY gerekli!")
+        if not self.telegram_token or not self.groq_key:
             return False
         return True
 
@@ -64,22 +57,20 @@ config = Config()
 
 # ==================== STORAGE ====================
 class RailwayStorage:
-    """
-    Railway persistent storage
-    Volume mount: /data/storage
-    """
+    """Railway persistent storage"""
 
     def __init__(self, storage_path: str = "/data/storage"):
         self.storage_path = Path(storage_path)
         self.storage_path.mkdir(parents=True, exist_ok=True)
 
         self.notes_file = self.storage_path / "notes.json"
-        self.sync_file = self.storage_path / "sync_status.json"
+        self.sync_file = self.storage_path / "sync_log.json"
 
         self.notes = self._load_notes()
+        self.sync_log = self._load_sync_log()
+        self.lock = threading.Lock()
 
     def _load_notes(self) -> List[Dict]:
-        """Notları yükle"""
         if self.notes_file.exists():
             try:
                 return json.loads(self.notes_file.read_text(encoding='utf-8'))
@@ -88,69 +79,105 @@ class RailwayStorage:
         return []
 
     def _save_notes(self):
-        """Notları kaydet"""
         try:
-            self.notes_file.write_text(
-                json.dumps(self.notes, ensure_ascii=False, indent=2, default=str),
-                encoding='utf-8'
-            )
+            with self.lock:
+                self.notes_file.write_text(
+                    json.dumps(self.notes, ensure_ascii=False, indent=2, default=str),
+                    encoding='utf-8'
+                )
         except Exception as e:
             logger.error(f"Not kaydetme hatası: {e}")
 
-    def add_note(self, user_id: int, text: str) -> str:
-        """Not ekle"""
-        note = {
-            "id": f"railway_{user_id}_{datetime.now().timestamp()}",
-            "user_id": user_id,
-            "text": text,
-            "created": datetime.now().isoformat(),
-            "synced": False  # Yerel sistemle senkronize edilmedi
-        }
-        self.notes.append(note)
-        self._save_notes()
+    def _load_sync_log(self) -> Dict:
+        if self.sync_file.exists():
+            try:
+                return json.loads(self.sync_file.read_text(encoding='utf-8'))
+            except:
+                pass
+        return {"last_sync": None, "synced_notes": []}
 
-        logger.info(f"Not eklendi: {note['id'][:20]}...")
-        return note["id"]
+    def _save_sync_log(self):
+        try:
+            self.sync_file.write_text(
+                json.dumps(self.sync_log, ensure_ascii=False, indent=2, default=str),
+                encoding='utf-8'
+            )
+        except Exception as e:
+            logger.error(f"Sync log kaydetme hatası: {e}")
+
+    def add_note(self, user_id: int, text: str, source: str = "railway") -> str:
+        with self.lock:
+            note = {
+                "id": f"{source}_{user_id}_{datetime.now().timestamp()}",
+                "user_id": user_id,
+                "text": text,
+                "created": datetime.now().isoformat(),
+                "source": source,
+                "synced_to_local": False
+            }
+            self.notes.append(note)
+            self._save_notes()
+            logger.info(f"Not eklendi: {note['id'][:20]}... (kaynak: {source})")
+            return note["id"]
 
     def get_notes(self, user_id: int, limit: int = 50) -> List[Dict]:
-        """Kullanıcı notlarını getir"""
         user_notes = [n for n in self.notes if n["user_id"] == user_id]
         return user_notes[-limit:]
 
-    def get_pending(self, user_id: int) -> List[Dict]:
-        """Senkronize edilmemiş notları getir"""
-        return [n for n in self.notes if n["user_id"] == user_id and not n.get("synced", False)]
+    def get_pending_sync(self) -> List[Dict]:
+        """Yerel'e senkronize edilmemiş notlar"""
+        return [n for n in self.notes if not n.get("synced_to_local", False)]
 
-    def mark_synced(self, note_ids: List[str]):
-        """Notları senkronize edildi olarak işaretle"""
-        count = 0
+    def mark_synced_to_local(self, note_ids: List[str]):
+        with self.lock:
+            count = 0
         for note in self.notes:
-            if note["id"] in note_ids and not note.get("synced", False):
-                note["synced"] = True
+            if note["id"] in note_ids and not note.get("synced_to_local", False):
+                note["synced_to_local"] = True
                 count += 1
         if count > 0:
             self._save_notes()
-            logger.info(f"{count} not senkronize edildi olarak işaretlendi")
+            self.sync_log["last_sync"] = datetime.now().isoformat()
+            self._save_sync_log()
+            logger.info(f"{count} not yerel'e senkronize edildi olarak işaretlendi")
+
+    def add_from_local(self, notes: List[Dict]) -> int:
+        """Yerelden gelen notları ekle"""
+        with self.lock:
+            added = 0
+            for note in notes:
+                if not any(n.get("id") == note.get("id") for n in self.notes):
+                    note["synced_from"] = "local"
+                    note["synced_to_local"] = True  # Yerel'den geldi, zaten orada
+                    self.notes.append(note)
+                    added += 1
+            if added > 0:
+                self._save_notes()
+                logger.info(f"{added} not yerelden senkronize edildi")
+            return added
 
     def search(self, user_id: int, query: str) -> List[Dict]:
-        """Arama"""
         query_lower = query.lower()
         results = []
         for note in self.notes:
             if note["user_id"] == user_id and query_lower in note["text"].lower():
                 results.append(note)
-        return results[-10:]  # Son 10 sonuç
+        return results[-10:]
 
     def get_stats(self) -> Dict:
-        """İstatistikler"""
         total = len(self.notes)
-        pending = sum(1 for n in self.notes if not n.get("synced", False))
+        pending = len([n for n in self.notes if not n.get("synced_to_local", False)])
 
         return {
             "total_notes": total,
             "pending_sync": pending,
+            "last_sync": self.sync_log.get("last_sync"),
             "storage_path": str(self.storage_path)
         }
+
+
+# Global storage instance
+storage = None
 
 
 # ==================== GROQ AGENT ====================
@@ -166,11 +193,10 @@ Emoji kullanabilirsin."""
         self.model = "llama-3.3-70b-versatile"
 
     def chat(self, text: str, context: List[Dict] = None) -> Optional[str]:
-        """Sohbet"""
         messages = [{"role": "system", "content": self.SYSTEM}]
 
         if context:
-            for msg in context[-3:]:  # Son 3 mesaj
+            for msg in context[-3:]:
                 messages.append({"role": msg["role"], "content": msg["content"]})
 
         messages.append({"role": "user", "content": text})
@@ -187,31 +213,133 @@ Emoji kullanabilirsin."""
             return None
 
 
-# ==================== RAILWAY BOT ====================
+# ==================== SYNC API (Flask) ====================
+sync_app = Flask(__name__)
+CORS(sync_app)
+
+
+@sync_app.route("/health", methods=["GET"])
+def health():
+    return jsonify({
+        "status": "ok",
+        "service": "railway-sync-bridge",
+        "timestamp": datetime.now().isoformat()
+    })
+
+
+@sync_app.route("/sync/from-local", methods=["POST"])
+def from_local():
+    """Yerel PC'den not al"""
+    token = request.headers.get("X-Sync-Token")
+    if token != config.sync_token:
+        return jsonify({"error": "Unauthorized"}), 401
+
+    try:
+        data = request.json
+        notes = data.get("notes", [])
+
+        added = storage.add_from_local(notes)
+
+        return jsonify({
+            "status": "ok",
+            "added": added,
+            "total_notes": len(storage.notes)
+        })
+    except Exception as e:
+        logger.error(f"Sync from local error: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
+@sync_app.route("/sync/to-local", methods=["GET"])
+def to_local():
+    """Yerel PC'ye not ver"""
+    token = request.headers.get("X-Sync-Token")
+    if token != config.sync_token:
+        return jsonify({"error": "Unauthorized"}), 401
+
+    try:
+        user_id = request.args.get("user_id", type=int)
+
+        # Bekleyen notları getir
+        pending = storage.get_pending_sync()
+        if user_id:
+            pending = [n for n in pending if n.get("user_id") == user_id]
+
+        return jsonify({
+            "status": "ok",
+            "notes": pending,
+            "count": len(pending)
+        })
+    except Exception as e:
+        logger.error(f"Sync to local error: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
+@sync_app.route("/sync/mark-local-synced", methods=["POST"])
+def mark_local_synced():
+    """Notları senkronize edildi olarak işaretle"""
+    token = request.headers.get("X-Sync-Token")
+    if token != config.sync_token:
+        return jsonify({"error": "Unauthorized"}), 401
+
+    try:
+        data = request.json
+        note_ids = data.get("note_ids", [])
+
+        storage.mark_synced_to_local(note_ids)
+
+        return jsonify({
+            "status": "ok",
+            "marked": len(note_ids)
+        })
+    except Exception as e:
+        logger.error(f"Mark synced error: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
+@sync_app.route("/sync/all", methods=["GET"])
+def get_all():
+    """Tüm notları getir"""
+    token = request.headers.get("X-Sync-Token")
+    if token != config.sync_token:
+        return jsonify({"error": "Unauthorized"}), 401
+
+    user_id = request.args.get("user_id", type=int)
+
+    notes = storage.notes.copy()
+    if user_id:
+        notes = [n for n in notes if n.get("user_id") == user_id]
+
+    return jsonify({
+        "status": "ok",
+        "notes": notes,
+        "count": len(notes)
+    })
+
+
+def run_flask():
+    """Flask API'yi ayrı thread'de çalıştır"""
+    logger.info(f"Sync API başlatılıyor (port {config.port})")
+    sync_app.run(host="0.0.0.0", port=config.port, use_reloader=False)
+
+
+# ==================== TELEGRAM BOT ====================
 class RailwayBot:
-    """Railway için Telegram botu"""
+    """Railway Telegram Bot"""
 
     def __init__(self):
-        self.storage = RailwayStorage(config.storage_path)
         self.groq = GroqAgent(config.groq_key)
-
-        # Kullanıcı bağlamı (kısa süreli memory)
         self.contexts: Dict[int, List[Dict]] = {}
 
     async def start(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Başlangıç komutu"""
         user_id = update.effective_user.id
-        stats = self.storage.get_stats()
+        stats = storage.get_stats()
 
         keyboard = [
-            [
-                InlineKeyboardButton("📝 Notlarım", callback_data=f"notes_{user_id}"),
-                InlineKeyboardButton("🔍 Ara", callback_data=f"search_{user_id}")
-            ],
-            [
-                InlineKeyboardButton("📊 Durum", callback_data=f"status_{user_id}"),
-                InlineKeyboardButton("🔄 Bekleyen", callback_data=f"pending_{user_id}")
-            ]
+            [InlineKeyboardButton("📝 Notlarım", callback_data=f"notes_{user_id}"),
+             InlineKeyboardButton("🔍 Ara", callback_data=f"search_{user_id}")],
+            [InlineKeyboardButton("📊 Durum", callback_data=f"status_{user_id}"),
+             InlineKeyboardButton("🔄 Sync", callback_data=f"sync_{user_id}")]
         ]
 
         reply = f"""🚂 **Railway Bot - 24/7 Aktif**
@@ -219,17 +347,14 @@ class RailwayBot:
 Merhaba {update.effective_user.first_name}!
 
 **Özellikler:**
-• Notlarınız Railway bulutta saklanır
+• Notlar Railway bulutta saklanır
 • PC açılınca otomatik senkronize olur
 • AI asistan (Llama 3.3) her zaman hazır
 
 **Durum:**
 📝 Toplam: {stats['total_notes']} not
-⏳ Bekleyen: {stats['pending_sync']} not
-
-**Kullanım:**
-• Mesaj yazın → Not olarak kaydedilir
-• Soru sorun → AI yanıt verir"""
+⏳ Bekleyen sync: {stats['pending_sync']} not
+🔄 Son sync: {stats['last_sync'] or 'Henüz'}"""
 
         await update.message.reply_text(
             reply,
@@ -238,100 +363,63 @@ Merhaba {update.effective_user.first_name}!
         )
 
     async def handle_message(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Mesaj işle"""
         user_id = update.effective_user.id
         text = update.message.text
 
-        # Typing göster
         await update.message.chat.send_action("typing")
 
-        # Soru mu, not mu?
         is_question = any(w in text.lower() for w in [
-            "?", "nedir", "nasıl", "kim", "nerede", "kaç", "neden",
-            "yapılır", "ederim", "eder misin", "bilir misin"
+            "?", "nedir", "nasıl", "kim", "nerede", "kaç", "neden"
         ])
 
         if is_question:
-            # Arama yap + AI yanıt
             await self._handle_question(update, user_id, text)
         else:
-            # Not kaydet
-            note_id = self.storage.add_note(user_id, text)
-
-            # Kısa AI yanıt
-            ai_response = self.groq.chat(f"Kullanıcı şunu not aldı: '{text}'. Kısa teyit mesajı ver.")
-            response = ai_response or f"✅ Not kaydedildi"
-
+            storage.add_note(user_id, text, source="railway")
+            ai_response = self.groq.chat(f"Kullanıcı not aldı: '{text}'. Kısa teyit.")
+            response = ai_response or "✅ Not kaydedildi (Railway)"
             await update.message.reply_text(response)
 
     async def _handle_question(self, update: Update, user_id: int, query: str):
-        """Soru işle"""
-        # Önce notlarda ara
-        results = self.storage.search(user_id, query)
+        results = storage.search(user_id, query)
 
         if results:
-            # Sonuç bulundu
-            reply = f"🔍 **Bulunanlar ({len(results)} adet):**\n\n"
+            reply = f"🔍 **Bulunanlar ({len(results)}):**\n\n"
             for note in results[-5:]:
                 reply += f"• {note['text'][:80]}...\n"
-
-            # AI ile özet
             await update.message.reply_text(reply, parse_mode='Markdown')
         else:
-            # Sonuç yok, AI yanıt ver
             ai_response = self.groq.chat(query)
             if ai_response:
                 await update.message.reply_text(f"🤖 **AI:**\n\n{ai_response}", parse_mode='Markdown')
             else:
-                await update.message.reply_text("❌ Üzgünüm, bir sorun oluştu.")
+                await update.message.reply_text("❌ Bir sorun oluştu.")
 
     async def show_notes(self, update: Update, user_id: int):
-        """Notları göster"""
-        notes = self.storage.get_notes(user_id)
-
+        notes = storage.get_notes(user_id)
         if not notes:
-            await update.message.reply_text("📭 Henüz notunuz yok.")
+            await update.message.reply_text("📭 Henüz not yok.")
             return
 
-        reply = f"📝 **Notlarınız ({len(notes)} adet):**\n\n"
+        reply = f"📝 **Notlarınız ({len(notes)}):**\n\n"
         for note in notes[-10:]:
             created = note['created'][:16].replace('T', ' ')
-            reply += f"• {created}: {note['text'][:60]}...\n"
+            source = note.get('source', 'railway')
+            reply += f"• [{source}] {created}: {note['text'][:60]}...\n"
 
         await update.message.reply_text(reply, parse_mode='Markdown')
 
-    async def show_pending(self, update: Update, user_id: int):
-        """Bekleyen notları göster"""
-        pending = self.storage.get_pending(user_id)
-
-        if not pending:
-            await update.message.reply_text("✅ Bekleyen not yok. Her şey senkronize!")
-            return
-
-        reply = f"⏳ **Senkronize bekleyen ({len(pending)} adet):**\n\n"
-        for note in pending[-10:]:
-            reply += f"• {note['created'][:10]}: {note['text'][:50]}...\n"
-
-        reply += f"\n🔄 PC açılınca otomatik senkronize edilecek."
-        await update.message.reply_text(reply, parse_mode='Markdown')
-
-    async def show_status(self, update: Update):
-        """Durum göster"""
-        stats = self.storage.get_stats()
-
-        reply = f"""📊 **Sistem Durumu**
+    async def show_status(self, update: Update, user_id: int):
+        stats = storage.get_stats()
+        reply = f"""📊 **Durum**
 
 🚂 Platform: Railway Cloud
-📝 Toplam Not: {stats['total_notes']}
-⏳ Bekleyen: {stats['pending_sync']}
-💾 Depolama: {stats['storage_path']}
-
-🤖 AI Model: Llama 3.3 70B (Groq)"""
-
+📝 Toplam: {stats['total_notes']} not
+⏳ Sync bekleyen: {stats['pending_sync']}
+🔄 Son sync: {stats['last_sync'] or 'Henüz'}"""
         await update.message.reply_text(reply, parse_mode='Markdown')
 
     async def button_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Buton callback"""
         query = update.callback_query
         await query.answer()
 
@@ -345,38 +433,40 @@ Merhaba {update.effective_user.first_name}!
         elif action == "search":
             await query.edit_message_text("🔍 Aramak istediğinizi yazın...")
         elif action == "status":
-            await self.show_status(update)
-        elif action == "pending":
-            await self.show_pending(update, user_id)
+            await self.show_status(update, user_id)
+        elif action == "sync":
+            stats = storage.get_stats()
+            reply = f"🔄 **Senkronizasyon**\n\nBekleyen: {stats['pending_sync']} not\nSon sync: {stats['last_sync'] or 'Henüz'}"
+            await query.edit_message_text(reply, parse_mode='Markdown')
 
 
 # ==================== MAIN ====================
 def main():
-    """Bot başlat"""
+    global storage
 
-    # Config kontrol
     if not config.validate():
-        logger.error("Config hatası! Environment variables kontrol edin.")
+        logger.error("Config hatası!")
         sys.exit(1)
 
-    # Storage dizini kontrol
-    logger.info(f"Storage path: {config.storage_path}")
+    storage = RailwayStorage(config.storage_path)
 
-    # Bot oluştur
+    # Flask API'yi ayrı thread'de başlat
+    flask_thread = threading.Thread(target=run_flask, daemon=True)
+    flask_thread.start()
+    logger.info("Sync API thread başlatıldı")
+
+    # Telegram bot
     bot = RailwayBot()
-
-    # Application
     app = Application.builder().token(config.telegram_token).build()
 
-    # Handler'lar
     app.add_handler(CommandHandler("start", bot.start))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, bot.handle_message))
     app.add_handler(CallbackQueryHandler(bot.button_callback))
 
-    # Başlat
     logger.info("=" * 50)
-    logger.info("Railway Bot Başlatılıyor...")
+    logger.info("Railway Bot + Sync Bridge Başlatılıyor...")
     logger.info(f"Storage: {config.storage_path}")
+    logger.info(f"Sync API: Port {config.port}")
     logger.info("AI: Groq Llama 3.3")
     logger.info("=" * 50)
 
