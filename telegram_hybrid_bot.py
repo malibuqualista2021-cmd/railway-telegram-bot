@@ -29,7 +29,7 @@ from functools import wraps
 import time
 
 import requests
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, Voice
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, Voice, ReplyKeyboardMarkup, KeyboardButton
 from telegram.ext import Application, CommandHandler, MessageHandler, CallbackQueryHandler, filters, ContextTypes
 from telegram.ext import ContextTypes
 from groq import Groq
@@ -1113,8 +1113,8 @@ class RailwayBot:
         
         # Persistent Bottom Keyboard
         reply_kb = [
-            ["🌟 Menü", "📋 Listele"],
-            ["🔍 Hafızada Ara", "📊 Durum"]
+            [KeyboardButton("🌟 Menü"), KeyboardButton("📋 Listele")],
+            [KeyboardButton("🔍 Hafızada Ara"), KeyboardButton("📊 Durum")]
         ]
         persistent_markup = ReplyKeyboardMarkup(reply_kb, resize_keyboard=True, persistent=True)
 
