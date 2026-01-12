@@ -258,7 +258,8 @@ Kısa, öz ve dostça yanıtlar ver."""
     def __init__(self, api_key: str):
         self.client = Groq(api_key=api_key)
         self.chat_model = "llama-3.3-70b-versatile"
-        self.whisper_model = "whisper-large-v3"  # Groq'un desteklediği model
+        self.vision_model = "llama-3.2-11b-vision-preview"
+        self.whisper_model = "whisper-large-v3"
 
     def chat(self, text: str) -> Optional[str]:
         messages = [
@@ -274,6 +275,35 @@ Kısa, öz ve dostça yanıtlar ver."""
             return response.choices[0].message.content
         except Exception as e:
             logger.error(f"Groq error: {e}")
+            return None
+
+    async def vision(self, image_data: bytes, prompt: str = "Resimdeki metni çıkar") -> Optional[str]:
+        """Görüntüden metin çıkar veya görüntüyü analiz et"""
+        import base64
+        base64_image = base64.b64encode(image_data).decode('utf-8')
+        
+        try:
+            response = self.client.chat.completions.create(
+                model=self.vision_model,
+                messages=[
+                    {
+                        "role": "user",
+                        "content": [
+                            {"type": "text", "text": prompt},
+                            {
+                                "type": "image_url",
+                                "image_url": {
+                                    "url": f"data:image/jpeg;base64,{base64_image}",
+                                },
+                            },
+                        ],
+                    }
+                ],
+                max_tokens=1000
+            )
+            return response.choices[0].message.content
+        except Exception as e:
+            logger.error(f"Vision error: {e}")
             return None
 
     def transcribe(self, audio_file: bytes) -> Optional[str]:
@@ -1068,6 +1098,40 @@ Lütfen SADECE yukarıdaki notlara dayanarak soruyu yanıtla.
             except:
                 pass
 
+    async def handle_photo(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Fotoğrafı işle - OCR ve analiz"""
+        user_id = update.effective_user.id
+        photo = update.message.photo[-1]  # En yüksek kalite
+        
+        await update.message.chat.send_action("upload_photo")
+        status_msg = await update.message.reply_text("👁️ Görsel analiz ediliyor...")
+        
+        try:
+            # Fotoğrafı indir
+            file = await photo.get_file()
+            img_bytearray = await file.download_as_bytearray()
+            
+            # Groq Vision ile analiz
+            prompt = "Bu görseldeki metni oku ve bir not olarak özetle. Eğer bir belge değilse görselde neler olduğunu anlat."
+            analysis = await self.groq.vision(bytes(img_bytearray), prompt)
+            
+            if not analysis:
+                await status_msg.edit_text("❌ Görsel analiz edilemedi")
+                return
+                
+            # AI ile kategori tahmini
+            category_prompt = f"Şu görsel analizinin kategorisini belirle: '{analysis[:200]}'. Sadece kategori ismini (İş, Kişisel, Finans vb.) döndür."
+            category = self.groq.chat(category_prompt) or "Görsel"
+            category = category.strip().strip("'").strip('"')
+            
+            storage.add_note(user_id, f"[Görsel] {analysis}", source="photo", category=category)
+            await status_msg.delete()
+            await update.message.reply_text(f"📸 **Görsel Not (# {category}):**\n\n{analysis}")
+            
+        except Exception as e:
+            logger.error(f"Photo handling error: {e}")
+            await status_msg.edit_text(f"❌ Görsel işleme hatası: {type(e).__name__}")
+
     async def _process_reminder_from_voice(self, update: Update, transcript: str):
         """Sesten hatırlatıcı çıkar"""
         user_id = update.effective_user.id
@@ -1415,6 +1479,7 @@ def main():
     app.add_handler(CommandHandler("routine", bot.routine_command))
     app.add_handler(CommandHandler("list", bot.list_command))
     app.add_handler(MessageHandler(filters.VOICE, bot.handle_voice))
+    app.add_handler(MessageHandler(filters.PHOTO, bot.handle_photo))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, bot.handle_message))
     app.add_handler(CallbackQueryHandler(bot.button_callback))
 
