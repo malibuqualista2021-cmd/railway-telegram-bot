@@ -1106,8 +1106,13 @@ def main():
     logger.info("Sync API thread started")
 
     # Telegram bot
+    logger.info("[DEBUG] Creating RailwayBot...")
     bot = RailwayBot()
+    logger.info("[DEBUG] RailwayBot created")
+
+    logger.info("[DEBUG] Building Telegram Application...")
     app = Application.builder().token(telegram_token).build()
+    logger.info("[DEBUG] Application built")
 
     # Handlers
     app.add_handler(CommandHandler("start", bot.start))
