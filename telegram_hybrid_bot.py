@@ -572,7 +572,14 @@ def run_flask():
 # ==================== TELEGRAM BOT ====================
 class RailwayBot:
     def __init__(self):
-        self.groq = GroqAgent(get_env("GROQ_API_KEY"))
+        try:
+            groq_key = get_env("GROQ_API_KEY")
+            logger.info(f"[DEBUG] GroqAgent init with key: {groq_key[:10] if groq_key else 'NONE'}...")
+            self.groq = GroqAgent(groq_key)
+            logger.info("[DEBUG] GroqAgent initialized successfully")
+        except Exception as e:
+            logger.error(f"[ERROR] GroqAgent init failed: {e}")
+            raise
 
     async def start(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         logger.info(f"=== START COMMAND RECEIVED from {update.effective_user.id} ===")
