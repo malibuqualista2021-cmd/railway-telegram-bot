@@ -238,6 +238,28 @@ class RailwayStorage:
             return True
         return False
 
+    def clear_all_reminders(self, user_id: int) -> int:
+        """Kullanıcının tüm bekleyen hatırlatıcılarını sil"""
+        count = 0
+        with self.lock:
+            initial_count = len(self.reminders)
+            self.reminders = [r for r in self.reminders if r["user_id"] != user_id or r.get("sent")]
+            count = initial_count - len(self.reminders)
+        if count > 0:
+            self._save_json(self.reminders_file, self.reminders)
+        return count
+
+    def clear_all_routines(self, user_id: int) -> int:
+        """Kullanıcının tüm rutinlerini sil"""
+        count = 0
+        with self.lock:
+            initial_count = len(self.routines)
+            self.routines = [r for r in self.routines if r["user_id"] != user_id]
+            count = initial_count - len(self.routines)
+        if count > 0:
+            self._save_json(self.routines_file, self.routines)
+        return count
+
     def get_stats(self) -> Dict:
         return {
             "total_notes": len(self.notes),
@@ -892,6 +914,19 @@ Sıklık seçenekleri:
 
         await update.message.reply_text(reply, parse_mode='Markdown')
 
+    async def clear_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """/clear komutu - Toplu silme arayüzü"""
+        keyboard = [
+            [InlineKeyboardButton("⏰ Tüm Hatırlatıcıları Sil", callback_data="clear_rem")],
+            [InlineKeyboardButton("🔄 Tüm Rutinleri Sil", callback_data="clear_ro")],
+            [InlineKeyboardButton("❌ İptal", callback_data="clear_cancel")]
+        ]
+        await update.message.reply_text(
+            "🗑️ **Toplu Silme Menüsü**\n\nHangi görevleri temizlemek istersiniz?",
+            reply_markup=InlineKeyboardMarkup(keyboard),
+            parse_mode='Markdown'
+        )
+
     async def handle_message(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         user_id = update.effective_user.id
         text = update.message.text
@@ -973,6 +1008,17 @@ Lütfen SADECE yukarıdaki notlara dayanarak soruyu yanıtla.
             stats = storage.get_stats()
             reply = f"📊 **Durum**\n\n📝 Not: {stats['total_notes']}\n⏰ Hatırlatıcı: {stats['pending_reminders']}\n🔄 Rutin: {stats['active_routines']}"
             await query.edit_message_text(reply, parse_mode='Markdown')
+        
+        elif data == "clear_rem":
+            count = storage.clear_all_reminders(user_id)
+            await query.edit_message_text(f"✅ {count} adet bekleyen hatırlatıcı temizlendi.")
+        
+        elif data == "clear_ro":
+            count = storage.clear_all_routines(user_id)
+            await query.edit_message_text(f"✅ {count} adet rutin temizlendi.")
+            
+        elif data == "clear_cancel":
+            await query.edit_message_text("❌ İşlem iptal edildi.")
         
         elif action == "canrem":
             # Hatırlatıcı iptal
@@ -1478,6 +1524,7 @@ def main():
     app.add_handler(CommandHandler("remind", bot.remind_command))
     app.add_handler(CommandHandler("routine", bot.routine_command))
     app.add_handler(CommandHandler("list", bot.list_command))
+    app.add_handler(CommandHandler("clear", bot.clear_command))
     app.add_handler(MessageHandler(filters.VOICE, bot.handle_voice))
     app.add_handler(MessageHandler(filters.PHOTO, bot.handle_photo))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, bot.handle_message))
