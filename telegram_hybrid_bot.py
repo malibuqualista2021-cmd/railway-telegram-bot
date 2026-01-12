@@ -284,7 +284,16 @@ Kısa, öz ve dostça yanıtlar ver."""
 
             if response.status_code == 200:
                 result = response.json()
-                text = result.get("results", [{}])[0].get("transcript", "").strip()
+                logger.info(f"Deepgram raw response: {json.dumps(result)[:500]}")
+                
+                # Deepgram API doğru format: results.channels[0].alternatives[0].transcript
+                try:
+                    text = result["results"]["channels"][0]["alternatives"][0]["transcript"].strip()
+                except (KeyError, IndexError) as e:
+                    logger.error(f"Deepgram response parse error: {e}")
+                    logger.error(f"Full response: {result}")
+                    text = ""
+                
                 logger.info(f"Transcription: {text[:100] if text else 'empty'}")
                 return text if text else None
             else:
