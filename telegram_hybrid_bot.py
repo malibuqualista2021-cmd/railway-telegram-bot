@@ -996,11 +996,15 @@ Sıklık seçenekleri:
             logger.error(f"[VOICE] EXCEPTION: {type(e).__name__}: {e}")
             import traceback
             logger.error(f"[VOICE] Traceback:\n{traceback.format_exc()}")
-            await status_msg.edit_text(f"❌ İşlem hatası: {type(e).__name__}")
+            try:
+                await update.message.reply_text(f"❌ İşlem hatası: {type(e).__name__}")
+            except:
+                pass
 
     async def _process_reminder_from_voice(self, update: Update, transcript: str):
         """Sesten hatırlatıcı çıkar"""
         user_id = update.effective_user.id
+        now_local = get_now_local()
         logger.info(f"[REMINDER] Processing reminder from voice for user {user_id}")
         logger.info(f"[REMINDER] Transcript: {transcript}")
 
