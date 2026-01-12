@@ -236,7 +236,7 @@ Kısa, öz ve dostça yanıtlar ver."""
             return None
 
     def transcribe(self, audio_file: bytes) -> Optional[str]:
-        """Ses dosyasını metne çevir (Hugging Face Whisper - Ücretsiz)"""
+        """Ses dosyasını metne çevir (OpenAI Whisper - en ucuz)"""
         import tempfile
         import os
 
@@ -250,32 +250,37 @@ Kısa, öz ve dostça yanıtlar ver."""
 
             logger.info(f"Temp file created: {tmp_path}")
 
-            # Hugging Face Inference API (Ücretsiz)
-            # Model: openai/whisper-large-v3
-            API_URL = "https://api-inference.huggingface.co/models/openai/whisper-large-v3"
-            headers = {"Authorization": "Bearer hf_yuDkqFoEgLmNFiCBzqYmVgjUwHtLGVYc"}
+            # OpenAI Whisper API (çok ucuz, ama API key gerekli)
+            # Kullanıcının GROQ key'i ile aynı hesaptan olabilir
+            openai_key = os.getenv("OPENAI_API_KEY", "")
 
-            with open(tmp_path, "rb") as audio:
-                response = requests.post(
-                    API_URL,
-                    headers=headers,
-                    data=audio,
-                    timeout=60
-                )
+            if openai_key:
+                # OpenAI Whisper kullan
+                import openai
+                client = openai.OpenAI(api_key=openai_key)
 
-            # Geçici dosyayı sil
-            try:
-                os.unlink(tmp_path)
-            except:
-                pass
+                with open(tmp_path, "rb") as audio:
+                    logger.info("Sending to OpenAI Whisper")
+                    transcription = client.audio.transcriptions.create(
+                        model="whisper-1",
+                        file=audio,
+                        language="tr"
+                    )
 
-            if response.status_code == 200:
-                result = response.json()
-                text = result.get("text", "").strip()
-                logger.info(f"Transcription result: {text[:100] if text else 'empty'}")
-                return text if text else None
+                try:
+                    os.unlink(tmp_path)
+                except:
+                    pass
+
+                logger.info(f"Transcription: {transcription.text[:100]}")
+                return transcription.text
             else:
-                logger.error(f"Hugging Face error: {response.status_code} - {response.text[:200]}")
+                # API key yok - hata döndür
+                try:
+                    os.unlink(tmp_path)
+                except:
+                    pass
+                logger.warning("OPENAI_API_KEY not set")
                 return None
 
         except Exception as e:
