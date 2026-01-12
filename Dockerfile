@@ -23,12 +23,8 @@ COPY telegram_hybrid_bot.py .
 # Persistent storage dizini oluştur
 RUN mkdir -p /data/storage
 
-# Railway healthcheck
-HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
-    CMD python -c "import requests; requests.get('http://localhost:8000/health', timeout=5)"
-
 # Portu aç (Railway otomatik ayarlar)
-EXPOSE 8000
+# EXPOSE 8000
 
 # Bot'u başlat
 CMD ["python", "-u", "telegram_hybrid_bot.py"]
