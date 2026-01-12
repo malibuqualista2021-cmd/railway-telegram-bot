@@ -16,6 +16,9 @@ import json
 import logging
 import threading
 import asyncio
+import tempfile
+import shutil
+import pytz
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Dict, List, Optional
@@ -39,6 +42,15 @@ logging.basicConfig(
     handlers=[logging.StreamHandler(sys.stdout)]
 )
 logger = logging.getLogger(__name__)
+
+# Timezone: Default is UTC, but we assume Turkey (UTC+3) for user interactions
+USER_TZ = pytz.timezone("Europe/Istanbul")
+
+def get_now_utc():
+    return datetime.now(pytz.UTC)
+
+def get_now_local():
+    return datetime.now(USER_TZ)
 
 
 # ==================== CONFIG: ZERO-DEPENDENCY PATTERN ====================
@@ -77,35 +89,43 @@ class RailwayStorage:
         self.lock = threading.Lock()
 
     def _load_json(self, path, default):
-        if path.exists():
-            try:
-                return json.loads(path.read_text(encoding='utf-8'))
-            except:
-                pass
-        return default
+        with self.lock:
+            if path.exists():
+                try:
+                    return json.loads(path.read_text(encoding='utf-8'))
+                except Exception as e:
+                    logger.error(f"Load error {path}: {e}")
+            return default
 
     def _save_json(self, path, data):
-        try:
-            with self.lock:
-                path.write_text(
-                    json.dumps(data, ensure_ascii=False, indent=2, default=str),
-                    encoding='utf-8'
-                )
-        except Exception as e:
-            logger.error(f"Save error {path}: {e}")
+        """Atomic write to prevent data corruption"""
+        with self.lock:
+            try:
+                # Create a temporary file
+                fd, temp_path = tempfile.mkstemp(dir=self.storage_path, prefix=path.name + ".tmp")
+                with os.fdopen(fd, 'w', encoding='utf-8') as f:
+                    json.dump(data, f, ensure_ascii=False, indent=2, default=str)
+                
+                # Atomic rename
+                shutil.move(temp_path, path)
+            except Exception as e:
+                logger.error(f"Save error {path}: {e}")
 
     def add_note(self, user_id: int, text: str, source: str = "railway") -> str:
         with self.lock:
             note = {
-                "id": f"{source}_{user_id}_{datetime.now().timestamp()}",
+                "id": f"{source}_{user_id}_{get_now_utc().timestamp()}",
                 "user_id": user_id,
                 "text": text,
-                "created": datetime.now().isoformat(),
+                "created": get_now_utc().isoformat(),
                 "source": source
             }
             self.notes.append(note)
-            self._save_json(self.notes_file, self.notes)
-            return note["id"]
+            # Unlock before calling _save_json to avoid double locking if not careful, 
+            # though here it's recursive-ish if we use the same lock in _save_json
+            # Let's keep the lock held for the whole transaction for strict consistency
+        self._save_json(self.notes_file, self.notes)
+        return note["id"]
 
     def get_notes(self, user_id: int, limit: int = 50) -> List[Dict]:
         user_notes = [n for n in self.notes if n["user_id"] == user_id]
@@ -124,26 +144,27 @@ class RailwayStorage:
         """Tek seferlik hatırlatıcı ekle"""
         with self.lock:
             reminder = {
-                "id": f"rem_{user_id}_{datetime.now().timestamp()}",
+                "id": f"rem_{user_id}_{get_now_utc().timestamp()}",
                 "user_id": user_id,
                 "text": text,
-                "remind_time": remind_time,  # ISO format
+                "remind_time": remind_time,  # ISO format (UTC)
                 "note_id": note_id,
                 "sent": False,
-                "created": datetime.now().isoformat()
+                "created": get_now_utc().isoformat()
             }
             self.reminders.append(reminder)
-            self._save_json(self.reminders_file, self.reminders)
-            return reminder["id"]
+        self._save_json(self.reminders_file, self.reminders)
+        return reminder["id"]
 
     def get_pending_reminders(self) -> List[Dict]:
         """Bekleyen hatırlatıcıları getir"""
-        now = datetime.now().isoformat()
-        pending = []
-        for r in self.reminders:
-            if not r.get("sent", False) and r["remind_time"] <= now:
-                pending.append(r)
-        return pending
+        now = get_now_utc().isoformat()
+        with self.lock:
+            pending = []
+            for r in self.reminders:
+                if not r.get("sent", False) and r["remind_time"] <= now:
+                    pending.append(r)
+            return pending
 
     def mark_reminder_sent(self, reminder_id: str):
         """Hatırlatıcıyı gönderildi olarak işaretle"""
@@ -166,38 +187,44 @@ class RailwayStorage:
         """
         with self.lock:
             routine = {
-                "id": f"rut_{user_id}_{datetime.now().timestamp()}",
+                "id": f"rut_{user_id}_{get_now_utc().timestamp()}",
                 "user_id": user_id,
                 "text": text,
                 "frequency": frequency,
                 "time": time,
                 "last_sent": None,
-                "created": datetime.now().isoformat()
+                "created": get_now_utc().isoformat()
             }
             self.routines.append(routine)
-            self._save_json(self.routines_file, self.routines)
-            return routine["id"]
+        self._save_json(self.routines_file, self.routines)
+        return routine["id"]
 
     def get_routines(self) -> List[Dict]:
-        return self.routines
+        with self.lock:
+            return list(self.routines)
 
     def get_user_routines(self, user_id: int) -> List[Dict]:
-        return [r for r in self.routines if r["user_id"] == user_id]
+        with self.lock:
+            return [r for r in self.routines if r["user_id"] == user_id]
 
     def update_routine_last_sent(self, routine_id: str):
         with self.lock:
             for r in self.routines:
                 if r["id"] == routine_id:
-                    r["last_sent"] = datetime.now().isoformat()
+                    r["last_sent"] = get_now_utc().isoformat()
             self._save_json(self.routines_file, self.routines)
 
     def delete_routine(self, routine_id: str) -> bool:
+        deleted = False
         with self.lock:
             for i, r in enumerate(self.routines):
                 if r["id"] == routine_id:
                     self.routines.pop(i)
-                    self._save_json(self.routines_file, self.routines)
-                    return True
+                    deleted = True
+                    break
+        if deleted:
+            self._save_json(self.routines_file, self.routines)
+            return True
         return False
 
     def get_stats(self) -> Dict:
@@ -358,8 +385,14 @@ Kısa, öz ve dostça yanıtlar ver."""
                     logger.info(f"[TRANSCRIBE-6] Transcript: '{transcript}'")
                     logger.info(f"[TRANSCRIBE-6] Confidence: {confidence}")
                     
+                    # Sinyal Saflaştırma: Güven eşiği kontrolü
+                    CONFIDENCE_THRESHOLD = 0.40  # Düşük ama gürültüden ayırmak için
+                    if confidence < CONFIDENCE_THRESHOLD:
+                        logger.warning(f"[TRANSCRIBE-6] Low confidence ({confidence}), signal might be noise.")
+                        return f"__low_confidence__:{transcript}"
+                    
                     if not transcript:
-                        logger.warning("[TRANSCRIBE-6] Empty transcript - audio may be silence or unclear")
+                        logger.warning("[TRANSCRIBE-6] Empty transcript")
                         return None
                     
                     return transcript
@@ -445,7 +478,7 @@ def parse_reminder_time(time_str: str) -> Optional[str]:
     
     try:
         time_str = time_str.strip()
-        now = datetime.now()
+        now_local = get_now_local()
         
         # Saat pattern'i bul (HH:MM formatı)
         time_pattern = re.search(r'(\d{1,2}):(\d{2})', time_str)
@@ -460,57 +493,52 @@ def parse_reminder_time(time_str: str) -> Optional[str]:
             logger.info(f"[PARSE_TIME] No time found, using default: {hour:02d}:{minute:02d}")
 
         time_str_lower = time_str.lower()
+        target_local = None
 
         # "yarın" kontrolü
         if "yarın" in time_str_lower:
-            target = now + timedelta(days=1)
-            target = target.replace(hour=hour, minute=minute, second=0, microsecond=0)
-            logger.info(f"[PARSE_TIME] 'yarın' detected, target: {target.isoformat()}")
-            return target.isoformat()
+            target_local = now_local + timedelta(days=1)
+            target_local = target_local.replace(hour=hour, minute=minute, second=0, microsecond=0)
+            logger.info(f"[PARSE_TIME] 'yarın' detected")
 
         # "bugün" kontrolü
-        if "bugün" in time_str_lower:
-            target = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
-            if target < now:
-                target += timedelta(days=1)
-            logger.info(f"[PARSE_TIME] 'bugün' detected, target: {target.isoformat()}")
-            return target.isoformat()
+        elif "bugün" in time_str_lower:
+            target_local = now_local.replace(hour=hour, minute=minute, second=0, microsecond=0)
+            if target_local < now_local:
+                target_local += timedelta(days=1)
+            logger.info(f"[PARSE_TIME] 'bugün' detected")
 
-        # Gün isimleri (Pazartesi, Salı, ...)
-        days_tr = {
-            "pazartesi": 0, "salı": 1, "çarşamba": 2, "perşembe": 3,
-            "cuma": 4, "cumartesi": 5, "pazar": 6
-        }
-        for day_tr, day_idx in days_tr.items():
-            if day_tr in time_str_lower:
-                current_day = now.weekday()
-                days_ahead = (day_idx - current_day) % 7
-                if days_ahead == 0:
-                    days_ahead = 7
-                target = now + timedelta(days=days_ahead)
-                target = target.replace(hour=hour, minute=minute, second=0, microsecond=0)
-                logger.info(f"[PARSE_TIME] '{day_tr}' detected, target: {target.isoformat()}")
-                return target.isoformat()
+        else:
+            # Gün isimleri
+            days_tr = {"pazartesi": 0, "salı": 1, "çarşamba": 2, "perşembe": 3, "cuma": 4, "cumartesi": 5, "pazar": 6}
+            for day_tr, day_idx in days_tr.items():
+                if day_tr in time_str_lower:
+                    days_ahead = (day_idx - now_local.weekday()) % 7
+                    if days_ahead == 0: days_ahead = 7
+                    target_local = now_local + timedelta(days=days_ahead)
+                    target_local = target_local.replace(hour=hour, minute=minute, second=0, microsecond=0)
+                    logger.info(f"[PARSE_TIME] '{day_tr}' detected")
+                    break
 
-        # Sadece saat varsa (HH:MM) → bugün veya yarın
-        if time_pattern and len(time_str) <= 10:
-            target = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
-            if target < now:
-                target += timedelta(days=1)
-            logger.info(f"[PARSE_TIME] Time only, target: {target.isoformat()}")
-            return target.isoformat()
+        # Sadece saat varsa
+        if not target_local and time_pattern and len(time_str) <= 10:
+            target_local = now_local.replace(hour=hour, minute=minute, second=0, microsecond=0)
+            if target_local < now_local:
+                target_local += timedelta(days=1)
+            logger.info(f"[PARSE_TIME] Time only detected")
 
-        # dateutil ile parse etmeyi dene
-        logger.info(f"[PARSE_TIME] Trying dateutil parser...")
-        target = parser.parse(time_str, fuzzy=True, dayfirst=True)
-        
-        # Geçmiş tarihse yarına al
-        if target < now:
-            if target.date() == now.date():
-                target += timedelta(days=1)
-        
-        logger.info(f"[PARSE_TIME] dateutil result: {target.isoformat()}")
-        return target.isoformat()
+        if not target_local:
+            logger.info(f"[PARSE_TIME] Falling back to dateutil parser...")
+            target_local = parser.parse(time_str, fuzzy=True, dayfirst=True)
+            if target_local.tzinfo is None:
+                target_local = USER_TZ.localize(target_local)
+            if target_local < now_local and target_local.date() == now_local.date():
+                target_local += timedelta(days=1)
+
+        # Convert to UTC for storage
+        target_utc = target_local.astimezone(pytz.UTC)
+        logger.info(f"[PARSE_TIME] Local: {target_local.isoformat()} -> UTC: {target_utc.isoformat()}")
+        return target_utc.isoformat()
 
     except Exception as e:
         logger.error(f"[PARSE_TIME] Error parsing '{time_str}': {type(e).__name__}: {e}")
@@ -560,7 +588,79 @@ CORS(sync_app)
 
 @sync_app.route("/health", methods=["GET"])
 def health():
-    return jsonify({"status": "ok", "service": "railway-bot", "timestamp": datetime.now().isoformat()})
+    return jsonify({
+        "status": "ok", 
+        "service": "railway-bot", 
+        "timestamp": get_now_utc().isoformat(),
+        "storage": "connected" if storage else "disconnected"
+    })
+
+def check_sync_auth():
+    token = request.headers.get("X-Sync-Token")
+    expected = get_env("SYNC_TOKEN")
+    if not expected or expected == "change-me-secure-token":
+        logger.warning("INSECURE SYNC ATTEMPT: SYNC_TOKEN is missing or default!")
+        return False
+    return token == expected
+
+@sync_app.route("/sync/from-local", methods=["POST"])
+def from_local():
+    if not check_sync_auth():
+        return jsonify({"error": "Unauthorized"}), 401
+    try:
+        data = request.json
+        notes = data.get("notes", [])
+        user_id = data.get("user_id")
+        
+        added = 0
+        with storage.lock:
+            for note in notes:
+                if not any(n.get("id") == note.get("id") for n in storage.notes):
+                    note["synced_from"] = "local"
+                    storage.notes.append(note)
+                    added += 1
+            if added > 0:
+                storage._save_json(storage.notes_file, storage.notes)
+        
+        return jsonify({"status": "ok", "added": added})
+    except Exception as e:
+        logger.error(f"Sync error: {e}")
+        return jsonify({"error": str(e)}), 500
+
+@sync_app.route("/sync/to-local", methods=["GET"])
+def to_local():
+    if not check_sync_auth():
+        return jsonify({"error": "Unauthorized"}), 401
+    try:
+        user_id = request.args.get("user_id", type=int)
+        pending = []
+        with storage.lock:
+            for note in storage.notes:
+                if note.get("synced_from") != "local" and not note.get("synced_to_local", False):
+                    if user_id is None or note.get("user_id") == user_id:
+                        pending.append(note)
+        return jsonify({"status": "ok", "notes": pending})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+@sync_app.route("/sync/mark-local-synced", methods=["POST"])
+def mark_local_synced():
+    if not check_sync_auth():
+        return jsonify({"error": "Unauthorized"}), 401
+    try:
+        data = request.json
+        note_ids = data.get("note_ids", [])
+        count = 0
+        with storage.lock:
+            for note in storage.notes:
+                if note.get("id") in note_ids:
+                    note["synced_to_local"] = True
+                    count += 1
+            if count > 0:
+                storage._save_json(storage.notes_file, storage.notes)
+        return jsonify({"status": "ok", "marked": count})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
 
 def run_flask():
@@ -855,20 +955,16 @@ Sıklık seçenekleri:
             logger.info(f"[VOICE] Transcription result: '{transcript}'" if transcript else "[VOICE] Transcription returned None")
 
             if not transcript:
-                # Detaylı hata mesajı
-                error_msg = "❌ Ses anlaşılamadı\n\n"
-                error_msg += "Olası nedenler:\n"
-                error_msg += "• Ses çok kısa veya sessiz\n"
-                error_msg += "• Arka plan gürültüsü fazla\n"
-                error_msg += "• Mikrofon sorunu\n\n"
-                error_msg += "💡 Daha uzun ve net konuşmayı deneyin"
-                
-                await status_msg.edit_text(error_msg)
+                await status_msg.edit_text("❌ Ses anlaşılamadı (sessizlik veya teknik sorun)")
                 return
 
-            logger.info(f"[VOICE] SUCCESS! Transcript for user {user_id}: {transcript[:100]}")
+            if transcript.startswith("__low_confidence__"):
+                actual_text = transcript.split(":", 1)[1]
+                logger.warning(f"[VOICE] Low confidence transcript: {actual_text}")
+                await status_msg.edit_text(f"⚠️ Ses çok net değil, ama şunu anladım:\n\n\"{actual_text}\"\n\nLütfen daha net veya yazılı olarak deneyin.")
+                return
 
-            # Başarılı transkripsiyon mesajı sil
+            logger.info(f"[VOICE] SUCCESS! Transcript: {transcript}")
             await status_msg.delete()
 
             # AI ile niyet sınıflandırması
@@ -940,11 +1036,16 @@ Sadece JSON döndür, başka bir şey yazma."""
                 
                 if remind_time:
                     storage.add_reminder(user_id, message, remind_time)
-                    dt = parser.parse(remind_time)
-                    readable = dt.strftime("%d.%m.%Y %H:%M")
+                    # UTC'den yerel saate çevir
+                    dt_utc = parser.parse(remind_time)
+                    if dt_utc.tzinfo is None:
+                        dt_utc = pytz.UTC.localize(dt_utc)
+                    dt_local = dt_utc.astimezone(USER_TZ)
+                    readable = dt_local.strftime("%d.%m.%Y %H:%M")
+                    
                     logger.info(f"[REMINDER] SUCCESS! Reminder set for {readable}")
                     await update.message.reply_text(
-                        f"⏰ Hatırlatıcı ayarlandı!\n\n📅 {readable}\n📝 {message}"
+                        f"✅ Hatırlatıcı ayarlandı!\n\n📅 {readable}\n📝 {message}"
                     )
                     return
                 else:
@@ -970,16 +1071,22 @@ Sadece JSON döndür, başka bir şey yazma."""
     async def _process_routine_from_voice(self, update: Update, transcript: str):
         """Sesten rutin çıkar"""
         user_id = update.effective_user.id
+        logger.info(f"[ROUTINE] Processing routine from voice for user {user_id}")
 
         # AI ile rutini çıkar
         prompt = f"""Bu metinden rutin sıklığını, saatini ve mesajını çıkar. JSON formatında döndür:
 {{"frequency": "günlük/haftalık/aylık/gün adı", "time": "HH:MM", "message": "mesaj"}}
+
+Örnekler:
+- "her gün sabah 8'de ilaç" → {{"frequency": "günlük", "time": "08:00", "message": "ilaç iç"}}
+- "pazartesileri 9'da toplantı" → {{"frequency": "Pazartesi", "time": "09:00", "message": "toplantı"}}
 
 Metin: {transcript}
 
 Sadece JSON döndür."""
 
         try:
+            logger.info("[ROUTINE] Calling Groq API...")
             response = self.groq.client.chat.completions.create(
                 model=self.groq.chat_model,
                 messages=[{"role": "user", "content": prompt}],
@@ -989,34 +1096,40 @@ Sadece JSON döndür."""
 
             import json
             result = json.loads(response.choices[0].message.content)
-            freq = result.get("frequency", "günlük")
+            freq = result.get("frequency", "daily")
             time_str = result.get("time", "09:00")
             message = result.get("message", transcript)
 
             storage.add_routine(user_id, message, freq, time_str)
+            
             await update.message.reply_text(
-                f"🔄 Rutin ayarlandı!\n\n{freq.capitalize()} • {time_str}\n📝 {message}"
+                f"✅ Rutin ayarlandı!\n\n🔄 {freq.capitalize()} • {time_str}\n📝 {message}"
             )
 
         except Exception as e:
-            logger.error(f"Routine extraction error: {e}")
-            storage.add_note(user_id, f"[Ses] {transcript}", source="voice")
-            await update.message.reply_text(f"📝 Not alındı:\n\n{transcript}")
+            logger.error(f"[ROUTINE] Error: {e}")
+            storage.add_note(user_id, f"[Ses-Rutin] {transcript}", source="voice")
+            await update.message.reply_text(f"📝 Not alındı (rutin anlaşılamadı):\n\n{transcript}")
 
 
 # ==================== REMINDER CHECKER ====================
 async def check_reminders_job(app: Application):
     """Periyodik hatırlatıcı kontrolü"""
-    logger.info("Checking reminders...")
-
+    now_utc = get_now_utc().isoformat()
     pending = storage.get_pending_reminders()
 
     for reminder in pending:
         try:
             user_id = reminder["user_id"]
             text = reminder["text"]
-            remind_time = parser.parse(reminder["remind_time"])
-            readable_time = remind_time.strftime("%d.%m.%Y %H:%M")
+            # remind_time storage'da UTC ISO formatında
+            dt_utc = parser.parse(reminder["remind_time"])
+            if dt_utc.tzinfo is None:
+                dt_utc = pytz.UTC.localize(dt_utc)
+            
+            # Kullanıcıya yerel saatle göster
+            dt_local = dt_utc.astimezone(USER_TZ)
+            readable_time = dt_local.strftime("%d.%m.%Y %H:%M")
 
             await app.bot.send_message(
                 chat_id=user_id,
@@ -1033,12 +1146,9 @@ async def check_reminders_job(app: Application):
 
 async def check_routines_job(app: Application):
     """Rutin hatırlatıcı kontrolü"""
-    logger.info("Checking routines...")
-
-    now = datetime.now()
-    current_time = now.strftime("%H:%M")
-    current_day = now.strftime("%A")  # Monday, Tuesday, etc.
-    current_day_tr = now.weekday()  # 0=Monday, 6=Sunday
+    now_local = get_now_local()
+    current_time = now_local.strftime("%H:%M")
+    current_weekday = now_local.weekday()  # 0=Monday
 
     days_tr_map = {0: "Pazartesi", 1: "Salı", 2: "Çarşamba",
                    3: "Perşembe", 4: "Cuma", 5: "Cumartesi", 6: "Pazar"}
@@ -1051,30 +1161,33 @@ async def check_routines_job(app: Application):
             freq = routine["frequency"].lower()
             routine_time = routine["time"]
 
-            # Saat kontrolü
+            # Saat kontrolü (tam dakika eşleşmesi)
             if routine_time != current_time:
                 continue
 
             # Frekans kontrolü
-            if freq == "daily" or freq == "günlük":
+            if freq in ["daily", "günlük"]:
                 should_send = True
-            elif freq == "weekly" or freq == "haftalık":
-                # Haftalık - her pazartesi veya haftanın ilk günü
-                if current_day_tr == 0:  # Pazartesi
+            elif freq in ["weekly", "haftalık"]:
+                if current_weekday == 0:  # Pazartesi
                     should_send = True
-            elif freq == "monthly" or freq == "aylık":
-                # Aylık - ayın 1'i
-                if now.day == 1:
+            elif freq in ["monthly", "aylık"]:
+                if now_local.day == 1:
                     should_send = True
-            elif freq in days_tr_map.values():
-                # Gün ismi
-                if days_tr_map[current_day_tr] == freq.capitalize():
+            elif freq.capitalize() in days_tr_map.values():
+                if days_tr_map[current_weekday] == freq.capitalize():
                     should_send = True
 
             # Last sent kontrolü (aynı gün içinde tekrar gönderme)
             if routine.get("last_sent"):
+                # last_sent UTC ISO formatında
                 last_sent = parser.parse(routine["last_sent"])
-                if (now - last_sent).days < 1:
+                if last_sent.tzinfo is None:
+                    last_sent = pytz.UTC.localize(last_sent)
+                
+                # Yerel tarihe çevirip gün farkına bak
+                last_sent_local = last_sent.astimezone(USER_TZ)
+                if last_sent_local.date() == now_local.date():
                     continue
 
             if should_send:
