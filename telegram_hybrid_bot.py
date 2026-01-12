@@ -1032,13 +1032,14 @@ class RoutineService:
 
 # ==================== TELEGRAM BOT ====================
 class RailwayBot:
-    def __init__(self):
+    def __init__(self, storage_instance):
         try:
+            self.storage = storage_instance
             groq_key = get_env("GROQ_API_KEY")
             # [Architecture] Service Injection
             self.groq: AIAgent = GroqAgent(groq_key)
-            self.reminder_service = ReminderService(storage)
-            self.routine_service = RoutineService(storage)
+            self.reminder_service = ReminderService(self.storage)
+            self.routine_service = RoutineService(self.storage)
             
             # Google Calendar
             google_creds_json = get_env("GOOGLE_CREDENTIALS")
@@ -1061,18 +1062,25 @@ class RailwayBot:
             
             # [Teleology] State for bypassing intent
             self.user_search_mode = {} 
-            self.pending_digests = set() # UX: Adaptive Kickstart
+            # UX: Adaptive Kickstart
+            self.pending_digests = set()
             
-            # Register for jobs
-            self.app.bot_data['bot_instance'] = self
+            # [Decoupling] App will be bound later via bind_app
+            self.app = None
         except Exception as e:
-            logger.error(f"[ERROR] GroqAgent init failed: {e}")
+            logger.error(f"[ERROR] RailwayBot init failed: {e}")
             raise
+
+    def bind_app(self, application):
+        """Bind the application instance and register for jobs"""
+        self.app = application
+        self.app.bot_data['bot_instance'] = self
+        logger.info("[DEBUG] RailwayBot bound to Application and registered in bot_data")
 
     async def start(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         logger.info(f"=== START COMMAND RECEIVED from {update.effective_user.id} ===")
         user_id = update.effective_user.id
-        stats = storage.get_stats()
+        stats = self.storage.get_stats()
 
         keyboard = [
             [InlineKeyboardButton("📝 Not Al", callback_data=f"note_{user_id}"),
@@ -1202,8 +1210,8 @@ Sıklık seçenekleri:
         """/list komutu - hatırlatıcı ve rutin listesi"""
         user_id = update.effective_user.id
 
-        reminders = storage.get_user_reminders(user_id)
-        routines = storage.get_user_routines(user_id)
+        reminders = self.storage.get_user_reminders(user_id)
+        routines = self.storage.get_user_routines(user_id)
 
         reply = "📋 **Hatırlatıcılarınız**\n\n"
 
@@ -1282,7 +1290,7 @@ Sıklık seçenekleri:
         # --- SUPPORT: SAFE MODE / RECOVERY VISIBILITY ---
         if SAFE_MODE or not ai_breaker.can_proceed():
             corr_id = generate_correlation_id()
-            storage.add_note(user_id, text, source=f"failsafe-{corr_id}", category="Genel")
+            self.storage.add_note(user_id, text, source=f"failsafe-{corr_id}", category="Genel")
             reason = "Aşırı yük veya bağlantı sorunu" if not ai_breaker.can_proceed() else "Güvenli Mod aktif"
             await update.message.reply_text(
                 f"🛡️ **Zarif Çöküş Protokolü Devrede**\n\n"
@@ -1304,7 +1312,7 @@ Sıklık seçenekleri:
         # --- SAFE MODE CHECK ---
         if SAFE_MODE or not ai_breaker.can_proceed():
             # Graceful Degradation: Sadece temel not kaydı
-            storage.add_note(user_id, text, source="railway-safe", category="Genel")
+            self.storage.add_note(user_id, text, source="railway-safe", category="Genel")
             await update.message.reply_text("🛡️ [Güvenli Mod] Notunuz AI yardımı olmadan standart olarak kaydedildi.")
             return
 
@@ -1316,43 +1324,49 @@ Sıklık seçenekleri:
         except Exception as e:
             corr_id = generate_correlation_id()
             logger.error(f"[{corr_id}] Intent inception error: {e}")
-            storage.add_note(user_id, text, source=f"error-fallback-{corr_id}", category="Genel")
+            self.storage.add_note(user_id, text, source=f"error-fallback-{corr_id}", category="Genel")
             await update.message.reply_text(
                 f"⚠️ **Anlama Hatası**\n\n"
-                f"Mesajınızı tam çözümleyemedim ama güvenle notlarıma ekledim. "
+                f"Mesajınızı tam çözümleyemedim ama güvenle notlarıma ekledim.\n"
                 f"Sistem şu an biraz yorgun görünüyor.\n\n"
                 f"🔍 Takip ID: `{corr_id}`",
                 parse_mode='Markdown'
             )
             return
 
+        # [Architecture] Intent Routing Strategy
+        await self._handle_routed_intent(update, user_id, text, intent, params)
+    async def _handle_routed_intent(self, update, user_id, text, intent, params):
+        """Routes the parsed intent to the specialized handler"""
         if intent == "reminder" and params.get("time"):
-            rem_text = params.get("text") or text
-            if self.reminder_service.create(user_id, rem_text, params["time"]):
-                await update.message.reply_text(f"⏰ Tamamdır! Hatırlatıcı eklendi: {params['time']}\n📝 {rem_text}")
-                return
-
+            await self._handle_reminder_intent(update, user_id, text, params)
         elif intent == "routine" and params.get("time") and params.get("frequency"):
-            if self.routine_service.create(user_id, params["frequency"], params["time"], params["text"]):
-                await update.message.reply_text(f"🔄 Rutin eklendi: {params['frequency']} @ {params['time']}\n📝 {params['text']}")
-                return
-
+            await self._handle_routine_intent(update, user_id, params)
         elif intent == "question":
             await self._perform_semantic_inquiry(update, user_id, text)
-            return
+        else:
+            await self._handle_note_intent(update, user_id, text, params)
 
-        # Default: Note with AI Category
+    async def _handle_reminder_intent(self, update, user_id, text, params):
+        rem_text = params.get("text") or text
+        if self.reminder_service.create(user_id, rem_text, params["time"]):
+            await update.message.reply_text(f"⏰ Tamamdır! Hatırlatıcı eklendi: {params['time']}\n📝 {rem_text}")
+
+    async def _handle_routine_intent(self, update, user_id, params):
+        if self.routine_service.create(user_id, params["frequency"], params["time"], params["text"]):
+            await update.message.reply_text(f"🔄 Rutin eklendi: {params['frequency']} @ {params['time']}\n📝 {params['text']}")
+
+    async def _handle_note_intent(self, update, user_id, text, params):
         category = params.get("category") or "Genel"
-        storage.add_note(user_id, text, source="railway-inception", category=category)
-        
+        self.storage.add_note(user_id, text, source="railway-inception", category=category)
         ai_confirm = self.groq.chat(f"Kullanıcının şu notunu '{category}' kategorisine kaydettim: '{text}'. Çok kısa ve zekice bir teyit ver.")
         await update.message.reply_text(ai_confirm or f"✅ Not kaydedildi. (#{category})")
 
     async def _send_daily_digest(self, user_id: int):
         """UX: Send daily summary on first interaction"""
         now_local = get_now_local()
-        reminders = storage.get_user_reminders(user_id)
-        routines = storage.get_user_routines(user_id)
+        reminders = self.storage.get_user_reminders(user_id)
+        routines = self.storage.get_user_routines(user_id)
         
         if not reminders and not routines:
             return
@@ -1383,7 +1397,7 @@ Sıklık seçenekleri:
 
     async def _perform_deterministic_search(self, update: Update, user_id: int, query: str):
         """Ontological: 'Finding' action (Keyword matching)"""
-        matching_knowledge = storage.search_notes(user_id, query)
+        matching_knowledge = self.storage.search_notes(user_id, query)
         
         if not matching_knowledge:
             await update.message.reply_text("🔍 Eşleşen bir bilgi bulunamadı.")
@@ -1401,11 +1415,11 @@ Sıklık seçenekleri:
              return
 
         # 1. Ham arama yap (Keyword bazlı context toplama)
-        relevant_context = storage.search_notes(user_id, inquiry_text)
+        relevant_context = self.storage.search_notes(user_id, inquiry_text)
         
         # 2. Eğer hiç sonuç yoksa, geniş kapsamlı arama (son 30 not)
         if not relevant_context:
-            relevant_context = storage.get_notes(user_id, limit=30)
+            relevant_context = self.storage.get_notes(user_id, limit=30)
 
         if relevant_context:
             # 3. AI'ya Bağlam (Context) olarak sun
@@ -1456,16 +1470,16 @@ Lütfen SADECE yukarıdaki notlara dayanarak soruyu yanıtla.
                 "Örnek: /routine günlük 09:00 Kahve"
             )
         elif action == "status":
-            stats = storage.get_stats()
+            stats = self.storage.get_stats()
             reply = f"📊 **Durum**\n\n📝 Not: {stats['total_notes']}\n⏰ Hatırlatıcı: {stats['pending_reminders']}\n🔄 Rutin: {stats['active_routines']}"
             await query.edit_message_text(reply, parse_mode='Markdown')
         
         elif data == "clear_rem":
-            count = storage.clear_all_reminders(user_id)
+            count = self.storage.clear_all_reminders(user_id)
             await query.edit_message_text(f"✅ {count} adet bekleyen hatırlatıcı temizlendi.")
         
         elif data == "clear_ro":
-            count = storage.clear_all_routines(user_id)
+            count = self.storage.clear_all_routines(user_id)
             await query.edit_message_text(f"✅ {count} adet rutin temizlendi.")
             
         elif data == "clear_cancel":
@@ -1475,7 +1489,7 @@ Lütfen SADECE yukarıdaki notlara dayanarak soruyu yanıtla.
             # Hatırlatıcı iptal
             # format: canrem_rem_user_timestamp
             reminder_id = "_".join(parts[1:])
-            if storage.delete_reminder(reminder_id):
+            if self.storage.delete_reminder(reminder_id):
                 await query.edit_message_text("❌ Hatırlatıcı iptal edildi.")
             else:
                 await query.edit_message_text("⚠️ Hatırlatıcı bulunamadı veya zaten silinmiş.")
@@ -1588,7 +1602,7 @@ Lütfen SADECE yukarıdaki notlara dayanarak soruyu yanıtla.
                 category = self.groq.chat(category_prompt) or "Genel"
                 category = category.strip().strip("'").strip('"')
                 
-                storage.add_note(user_id, f"[Ses] {transcript}", source="voice", category=category)
+                self.storage.add_note(user_id, f"[Ses] {transcript}", source="voice", category=category)
                 await update.message.reply_text(f"📝 Not alındı (#{category}):\n\n{transcript}")
             else:  # chat
                 ai_response = self.groq.chat(transcript)
@@ -1634,7 +1648,7 @@ Lütfen SADECE yukarıdaki notlara dayanarak soruyu yanıtla.
             category = self.groq.chat(category_prompt) or "Görsel"
             category = category.strip().strip("'").strip('"')
             
-            storage.add_note(user_id, f"[Görsel] {analysis}", source="photo", category=category)
+            self.storage.add_note(user_id, f"[Görsel] {analysis}", source="photo", category=category)
             await status_msg.delete()
             await update.message.reply_text(f"📸 **Görsel Not (# {category}):**\n\n{analysis}")
             
@@ -1767,13 +1781,13 @@ Sadece JSON döndür."""
         except json.JSONDecodeError as e:
             logger.error(f"[REMINDER] JSON parse error: {e}")
             logger.error(f"[REMINDER] Raw content was: {raw_content}")
-            storage.add_note(user_id, f"[Ses] {transcript}", source="voice")
+            self.storage.add_note(user_id, f"[Ses] {transcript}", source="voice")
             await update.message.reply_text(f"📝 Not alındı:\n\n{transcript}")
         except Exception as e:
             logger.error(f"[REMINDER] Unexpected error: {type(e).__name__}: {e}")
             import traceback
             logger.error(f"[REMINDER] Traceback: {traceback.format_exc()}")
-            storage.add_note(user_id, f"[Ses] {transcript}", source="voice")
+            self.storage.add_note(user_id, f"[Ses] {transcript}", source="voice")
             await update.message.reply_text(f"📝 Not alındı:\n\n{transcript}")
 
     async def _process_routine_from_voice(self, update: Update, transcript: str):
@@ -1810,7 +1824,7 @@ Sadece JSON döndür."""
             time_str = result.get("time", "09:00")
             message = result.get("message", transcript)
 
-            storage.add_routine(user_id, message, freq, time_str)
+            self.storage.add_routine(user_id, message, freq, time_str)
             
             await update.message.reply_text(
                 f"✅ Rutin ayarlandı!\n\n🔄 {freq.capitalize()} • {time_str}\n📝 {message}"
@@ -1818,19 +1832,24 @@ Sadece JSON döndür."""
 
         except Exception as e:
             logger.error(f"[ROUTINE] Error: {e}")
-            storage.add_note(user_id, f"[Ses-Rutin] {transcript}", source="voice")
+            self.storage.add_note(user_id, f"[Ses-Rutin] {transcript}", source="voice")
             await update.message.reply_text(f"📝 Not alındı (rutin anlaşılamadı):\n\n{transcript}")
 
 
 # ==================== REMINDER CHECKER ====================
 async def check_reminders_job(app: Application):
     """Periyodik hatırlatıcı kontrolü"""
+    bot = app.bot_data.get('bot_instance')
+    if not bot:
+        logger.warning("[JOBS] check_reminders_job: bot_instance NOT FOUND in bot_data")
+        return
+
     now_utc = get_now_utc().isoformat()
-    pending = storage.get_pending_reminders()
+    pending = bot.storage.get_pending_reminders()
 
     for reminder in pending:
         # Idempotent Trigger: Önce "claim" et
-        if not storage.claim_reminder(reminder["id"]):
+        if not bot.storage.claim_reminder(reminder["id"]):
             continue
 
         try:
@@ -1859,7 +1878,7 @@ async def check_reminders_job(app: Application):
                 parse_mode='Markdown'
             )
 
-            storage.mark_reminder_sent(reminder["id"])
+            bot.storage.mark_reminder_sent(reminder["id"])
             logger.info(f"Reminder sent to {user_id}: {text[:30]}")
 
         except Exception as e:
@@ -1868,6 +1887,11 @@ async def check_reminders_job(app: Application):
 
 async def check_routines_job(app: Application):
     """Rutin hatırlatıcı kontrolü"""
+    bot = app.bot_data.get('bot_instance')
+    if not bot:
+        logger.warning("[JOBS] check_routines_job: bot_instance NOT FOUND in bot_data")
+        return
+
     now_local = get_now_local()
     current_time = now_local.strftime("%H:%M")
     current_weekday = now_local.weekday()  # 0=Monday
@@ -1875,7 +1899,7 @@ async def check_routines_job(app: Application):
     days_tr_map = {0: "Pazartesi", 1: "Salı", 2: "Çarşamba",
                    3: "Perşembe", 4: "Cuma", 5: "Cumartesi", 6: "Pazar"}
 
-    routines = storage.get_routines()
+    routines = bot.storage.get_routines()
 
     for routine in routines:
         try:
@@ -1914,7 +1938,7 @@ async def check_routines_job(app: Application):
 
             if should_send:
                 # Preemptive update for determinism
-                if not storage.update_routine_last_sent(routine["id"]):
+                if not bot.storage.update_routine_last_sent(routine["id"]):
                     continue
 
                 user_id = routine["user_id"]
@@ -1969,12 +1993,15 @@ def main():
 
     # Telegram bot
     logger.info("[DEBUG] Creating RailwayBot...")
-    bot = RailwayBot()
+    bot = RailwayBot(storage)
     logger.info("[DEBUG] RailwayBot created")
 
     logger.info("[DEBUG] Building Telegram Application...")
     app = Application.builder().token(telegram_token).build()
     logger.info("[DEBUG] Application built")
+
+    # [Architecture] Bind bot to app post-init to avoid circularity
+    bot.bind_app(app)
 
     # Handlers
     app.add_handler(CommandHandler("start", bot.start))
