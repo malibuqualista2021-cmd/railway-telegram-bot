@@ -256,21 +256,23 @@ Kısa, öz ve dostça yanıtlar ver."""
 
             logger.info(f"Temp file created: {tmp_path}")
 
-            # Deepgram API
-            url = "https://api.deepgram.com/v1/listen"
+            # Deepgram API - Türkçe dil desteği ile
+            url = "https://api.deepgram.com/v1/listen?language=tr&model=nova-2&smart_format=true"
             headers = {
                 "Authorization": f"Token {deepgram_key}",
                 "Content-Type": "audio/ogg"
             }
 
             with open(tmp_path, "rb") as audio:
-                logger.info("Sending to Deepgram")
+                logger.info(f"Sending to Deepgram (URL: {url})")
+                logger.info(f"Authorization header: Token {deepgram_key[:10]}...")
                 response = requests.post(
                     url,
                     headers=headers,
                     data=audio,
                     timeout=30
                 )
+                logger.info(f"Deepgram response status: {response.status_code}")
 
             # Geçici dosyayı sil
             try:
@@ -658,10 +660,17 @@ Sıklık seçenekleri:
             await query.edit_message_text(reply, parse_mode='Markdown')
 
     async def handle_voice(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Sesli mesaj işle - Whisper ile transkripsiyon + AI sınıflandırma"""
+        """Sesli mesaj işle - Deepgram transkripsiyon + AI sınıflandırma"""
         user_id = update.effective_user.id
         voice = update.message.voice
         duration = voice.duration
+
+        # Debug log
+        logger.info(f"=== VOICE MESSAGE RECEIVED ===")
+        logger.info(f"User ID: {user_id}, Duration: {duration}s")
+        logger.info(f"Config deepgram_key exists: {bool(config.deepgram_key)}")
+        logger.info(f"Env DEEPGRAM_API_KEY exists: {bool(os.getenv('DEEPGRAM_API_KEY'))}")
+        logger.info(f"Final key: {config.deepgram_key or os.getenv('DEEPGRAM_API_KEY', 'MISSING')[:10]}...")
 
         # 10 dakikadan uzunsa reddet
         if duration > 600:
@@ -676,11 +685,18 @@ Sıklık seçenekleri:
             new_file = await voice.get_file()
             audio_data = await new_file.download_as_bytearray()
 
-            # Whisper ile transkripsiyon
+            logger.info(f"Audio file downloaded: {len(audio_data)} bytes")
+
+            # Deepgram ile transkripsiyon
             transcript = self.groq.transcribe(bytes(audio_data))
 
+            logger.info(f"Transcript result: {transcript if transcript else 'NONE'}")
+
             if not transcript:
-                await update.message.reply_text("❌ Ses anlaşılamadı, tekrar deneyin.")
+                await update.message.reply_text("❌ Ses anlaşılamadı (teknik sorun)")
+                # API key yoksa bilgi ver
+                if not config.deepgram_key and not os.getenv('DEEPGRAM_API_KEY'):
+                    await update.message.reply_text("⚠️ API Key eksik, Railway'e eklenmeli")
                 return
 
             logger.info(f"Transcript for {user_id}: {transcript[:100]}")
@@ -703,7 +719,9 @@ Sıklık seçenekleri:
                     await update.message.reply_text(f"🤖 **AI:**\n\n{ai_response}", parse_mode='Markdown')
 
         except Exception as e:
-            logger.error(f"Voice processing error: {e}")
+            logger.error(f"Voice processing error: {type(e).__name__}: {e}")
+            import traceback
+            logger.error(f"Traceback: {traceback.format_exc()}")
             await update.message.reply_text(f"❌ İşlem hatası: {str(e)[:100]}")
 
     async def _process_reminder_from_voice(self, update: Update, transcript: str):
