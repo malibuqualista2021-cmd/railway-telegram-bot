@@ -236,7 +236,7 @@ Kısa, öz ve dostça yanıtlar ver."""
             return None
 
     def transcribe(self, audio_file: bytes) -> Optional[str]:
-        """Ses dosyasını metne çevir (Whisper)"""
+        """Ses dosyasını metne çevir (Hugging Face Whisper - Ücretsiz)"""
         import tempfile
         import os
 
@@ -250,16 +250,18 @@ Kısa, öz ve dostça yanıtlar ver."""
 
             logger.info(f"Temp file created: {tmp_path}")
 
-            # Groq Whisper ile transkripsiyon
-            with open(tmp_path, "rb") as audio:
-                logger.info(f"Sending to Groq Whisper, model: {self.whisper_model}")
-                transcription = self.client.audio.transcriptions.create(
-                    file=(Path(tmp_path).name, audio.read()),
-                    model=self.whisper_model
-                    # language ve prompt kaldırıldı - otomatik tespit daha iyi
-                )
+            # Hugging Face Inference API (Ücretsiz)
+            # Model: openai/whisper-large-v3
+            API_URL = "https://api-inference.huggingface.co/models/openai/whisper-large-v3"
+            headers = {"Authorization": "Bearer hf_yuDkqFoEgLmNFiCBzqYmVgjUwHtLGVYc"}
 
-            logger.info(f"Transcription result: {transcription.text[:100] if transcription.text else 'empty'}")
+            with open(tmp_path, "rb") as audio:
+                response = requests.post(
+                    API_URL,
+                    headers=headers,
+                    data=audio,
+                    timeout=60
+                )
 
             # Geçici dosyayı sil
             try:
@@ -267,10 +269,17 @@ Kısa, öz ve dostça yanıtlar ver."""
             except:
                 pass
 
-            return transcription.text if transcription and transcription.text else None
+            if response.status_code == 200:
+                result = response.json()
+                text = result.get("text", "").strip()
+                logger.info(f"Transcription result: {text[:100] if text else 'empty'}")
+                return text if text else None
+            else:
+                logger.error(f"Hugging Face error: {response.status_code} - {response.text[:200]}")
+                return None
 
         except Exception as e:
-            logger.error(f"Whisper error: {type(e).__name__}: {e}")
+            logger.error(f"Transcription error: {type(e).__name__}: {e}")
             return None
 
     def classify_intent(self, text: str) -> str:
