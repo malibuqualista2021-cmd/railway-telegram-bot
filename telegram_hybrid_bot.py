@@ -83,10 +83,10 @@ class RailwayStorage:
         self.reminders_file = self.storage_path / "reminders.json"
         self.routines_file = self.storage_path / "routines.json"
 
+        self.lock = threading.Lock()
         self.notes = self._load_json(self.notes_file, [])
         self.reminders = self._load_json(self.reminders_file, [])
         self.routines = self._load_json(self.routines_file, [])
-        self.lock = threading.Lock()
 
     def _load_json(self, path, default):
         with self.lock:
