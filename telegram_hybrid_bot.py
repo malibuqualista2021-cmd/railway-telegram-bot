@@ -997,13 +997,19 @@ Sıklık seçenekleri:
         logger.info(f"[REMINDER] Transcript: {transcript}")
 
         # AI ile zaman ve mesajı çıkar
-        prompt = f"""Bu metinden hatırlatıcı zamanı ve mesajını çıkar. JSON formatında döndür:
-{{"time": "YYYY-MM-DD HH:MM veya yarın HH:MM veya HH:MM", "message": "mesaj"}}
+        now_str = get_now_local().strftime("%d.%m.%Y %H:%M")
+        prompt = f"""Sistem Zamanı: {now_str}
+Bu metinden hatırlatıcı zamanı ve mesajını çıkar. JSON formatında döndür:
+{{"time": "YYYY-MM-DD HH:MM", "message": "mesaj"}}
+
+ÖNEMLİ: 
+1. Zamanı mutlaka sistem zamanını baz alarak YYYY-MM-DD HH:MM formatında hesapla.
+2. "Beni ... uyar", "... hatırlat" gibi kısımları mesajdan temizle.
+3. Mesajı kısa ve öz tut.
 
 Örnekler:
-- "yarın akşam 8'de spor" → {{"time": "yarın 20:00", "message": "spor yapmam lazım"}}
-- "saat 3'te toplantı" → {{"time": "15:00", "message": "toplantı"}}
-- "pazartesi 9'da doktor" → {{"time": "Pazartesi 09:00", "message": "doktor randevusu"}}
+- "yarın akşam 8'de spor" → {{"time": "2026-01-13 20:00", "message": "spor"}}
+- "10 dakika sonra toplantı" ({now_str} ise) → {{"time": "2026-01-12 05:52", "message": "toplantı"}}
 
 Metin: {transcript}
 
@@ -1074,7 +1080,9 @@ Sadece JSON döndür, başka bir şey yazma."""
         logger.info(f"[ROUTINE] Processing routine from voice for user {user_id}")
 
         # AI ile rutini çıkar
-        prompt = f"""Bu metinden rutin sıklığını, saatini ve mesajını çıkar. JSON formatında döndür:
+        now_str = get_now_local().strftime("%d.%m.%Y %H:%M")
+        prompt = f"""Sistem Zamanı: {now_str}
+Bu metinden rutin sıklığını, saatini ve mesajını çıkar. JSON formatında döndür:
 {{"frequency": "günlük/haftalık/aylık/gün adı", "time": "HH:MM", "message": "mesaj"}}
 
 Örnekler:
