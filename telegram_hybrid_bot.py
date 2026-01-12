@@ -1116,7 +1116,7 @@ class RailwayBot:
             [KeyboardButton("🌟 Menü"), KeyboardButton("📋 Listele")],
             [KeyboardButton("🔍 Hafızada Ara"), KeyboardButton("📊 Durum")]
         ]
-        persistent_markup = ReplyKeyboardMarkup(reply_kb, resize_keyboard=True, persistent=True)
+        persistent_markup = ReplyKeyboardMarkup(reply_kb, resize_keyboard=True)
 
         # Rich Inline Menu (Feature Universe)
         inline_kb = [
