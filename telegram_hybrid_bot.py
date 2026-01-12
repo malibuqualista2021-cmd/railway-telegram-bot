@@ -326,6 +326,16 @@ class RailwayStorage:
                     results.append(note)
         return results[-15:]
 
+    def delete_note(self, note_id: str) -> bool:
+        """Notu sil"""
+        def update(data):
+            for i, n in enumerate(data):
+                if n["id"] == note_id:
+                    data.pop(i)
+                    return True
+            return False
+        return self._transactional_update(self.notes_file, self.notes, update)
+
     # ===== REMINDERS =====
     def add_reminder(self, user_id: int, text: str, remind_time: str, note_id: str = None) -> str:
         """Tek seferlik hatırlatıcı ekle"""
@@ -555,13 +565,14 @@ Kısa, öz ve dostça yanıtlar ver."""
 
 Yanıtı SADECE şu JSON formatında ver:
 {{
-  "intent": "note" | "reminder" | "routine" | "question",
+  "intent": "note" | "reminder" | "routine" | "question" | "delete",
   "params": {{
     "text": "asıl mesaj içeriği",
     "time": "varsa zaman (HH:MM veya natural language)",
     "frequency": "routine ise sıklık",
     "category": "note ise kategori",
-    "estimated_prep_minutes": "Eğer bu bir deadline, yayın veya önemli bir etkinlikse (örn: video yayını, toplantı, randevu), hazırlık için gereken tahmini dakika (int). Örn: Video/Yayın=120, Toplantı=15, Randevu=30-60. Gerekmiyorsa 0."
+    "estimated_prep_minutes": "hazırlık süresi (int)",
+    "target_query": "Eğer intent 'delete' ise, silinmek istenen öğeyi tanımlayan anahtar kelimeler (örn: 'video çekmek', 'toplantı', 'market listesi')"
   }}
 }}
 
@@ -1362,6 +1373,8 @@ Sıklık seçenekleri:
             await self._handle_routine_intent(update, user_id, params)
         elif intent == "question":
             await self._perform_semantic_inquiry(update, user_id, text)
+        elif intent == "delete":
+            await self._handle_delete_intent(update, user_id, params)
         else:
             await self._handle_note_intent(update, user_id, text, params)
 
@@ -1394,6 +1407,36 @@ Sıklık seçenekleri:
         self.storage.add_note(user_id, text, source="railway-inception", category=category)
         ai_confirm = self.groq.chat(f"Kullanıcının şu notunu '{category}' kategorisine kaydettim: '{text}'. Çok kısa ve zekice bir teyit ver.")
         await update.message.reply_text(ai_confirm or f"✅ Not kaydedildi. (#{category})")
+
+    async def _handle_delete_intent(self, update, user_id, params):
+        """Autonomous Search-and-Destroy for notes/reminders"""
+        query = params.get("target_query")
+        if not query:
+            await update.message.reply_text("🤔 Neyi silmek istediğinizi tam anlayamadım.")
+            return
+
+        # 1. Önce hatırlatıcılarda ara
+        reminders = self.storage.get_user_reminders(user_id)
+        target_rem = None
+        for r in reversed(reminders): # En günceli bul
+            if query.lower() in r["text"].lower():
+                target_rem = r
+                break
+        
+        if target_rem:
+            if self.storage.delete_reminder(target_rem["id"]):
+                await update.message.reply_text(f"🗑️ Hatırlatıcı silindi: {target_rem['text']}")
+                return
+
+        # 2. Notlarda ara
+        notes = self.storage.search_notes(user_id, query)
+        if notes:
+            target_note = notes[-1] # En günceli bul
+            if self.storage.delete_note(target_note["id"]):
+                await update.message.reply_text(f"🗑️ Not silindi: {target_note['text']}")
+                return
+        
+        await update.message.reply_text(f"🔍 '{query}' ile ilgili silinecek bir kayıt bulamadım.")
 
     async def _send_daily_digest(self, user_id: int):
         """UX: Send daily summary on first interaction"""
