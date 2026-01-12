@@ -241,7 +241,7 @@ Kısa, öz ve dostça yanıtlar ver."""
         import tempfile
         import os
 
-        deepgram_key = config.deepgram_key
+        deepgram_key = config.deepgram_key or os.getenv("DEEPGRAM_API_KEY", "")
         if not deepgram_key:
             logger.warning("DEEPGRAM_API_KEY not set")
             return None
