@@ -885,14 +885,33 @@ Sıklık seçenekleri:
             await update.message.reply_text(response)
 
     async def _handle_question(self, update: Update, user_id: int, query: str):
+        # 1. Ham arama yap (Keyword bazlı)
         results = storage.search_notes(user_id, query)
+        
+        # 2. Eğer hiç sonuç yoksa, geniş kapsamlı arama (son 30 not)
+        if not results:
+            results = storage.get_notes(user_id, limit=30)
 
         if results:
-            reply = f"🔍 **Bulunanlar ({len(results)}):**\n\n"
-            for note in results[-5:]:
-                reply += f"• {note['text'][:80]}...\n"
-            await update.message.reply_text(reply, parse_mode='Markdown')
+            # 3. AI'ya Bağlam (Context) olarak sun
+            context_text = "\n".join([f"- [{n['category']}] {n['text']}" for n in results])
+            
+            prompt = f"""Kullanıcının geçmiş notları aşağıda verilmiştir:
+---
+{context_text}
+---
+Kullanıcı sorusu: "{query}"
+
+Lütfen SADECE yukarıdaki notlara dayanarak soruyu yanıtla. 
+- Eğer bilgi yoksa "Bu konuda notlarımda bir bilgi bulamadım" de.
+- Bilgi varsa özetle ve kategorileri belirt.
+- Yanıtı Türkçe ve samimi bir dille ver."""
+
+            ai_response = self.groq.chat(prompt)
+            if ai_response:
+                await update.message.reply_text(f"🤖 **Hafıza:**\n\n{ai_response}", parse_mode='Markdown')
         else:
+            # Not yoksa doğrudan genel AI cevabı
             ai_response = self.groq.chat(query)
             if ai_response:
                 await update.message.reply_text(f"🤖 **AI:**\n\n{ai_response}", parse_mode='Markdown')
