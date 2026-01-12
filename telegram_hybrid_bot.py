@@ -41,20 +41,13 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
-# ==================== CONFIG ====================
-class Config:
-    telegram_token: str = os.getenv("TELEGRAM_TOKEN", "")
-    groq_key: str = os.getenv("GROQ_API_KEY", "")
-    deepgram_key: str = os.getenv("DEEPGRAM_API_KEY", "")
-    sync_token: str = os.getenv("SYNC_TOKEN", "default-sync-token")
-    storage_path: str = os.getenv("RAILWAY_VOLUME_URL", "/data/storage")
-    port: int = int(os.getenv("PORT", "5000"))
+# ==================== CONFIG: ZERO-DEPENDENCY PATTERN ====================
+# Config class'ı kaldırıldı - her çağrıda fresh os.getenv() kullanılır
+# Bu, Railway container'ında env var load timing sorununu çözer
 
-    def validate(self) -> bool:
-        return bool(self.telegram_token and self.groq_key)
-
-
-config = Config()
+def get_env(key: str, default: str = "") -> str:
+    """Environment variable oku - her çağrıda fresh değer"""
+    return os.getenv(key, default)
 
 # ==================== DEBUG: ENV VARIABLES ====================
 logger.info("=== ENVIRONMENT VARIABLES DEBUG ===")
@@ -63,8 +56,6 @@ for key in sorted(os.environ.keys()):
         value = os.environ[key]
         masked = value[:8] + "..." if len(value) > 8 else "***"
         logger.info(f"{key} = {masked}")
-logger.info(f"Config.deepgram_key = {config.deepgram_key[:8] + '...' if config.deepgram_key else 'EMPTY'}")
-logger.info(f"Config.groq_key = {config.groq_key[:8] + '...' if config.groq_key else 'EMPTY'}")
 logger.info("====================================\n")
 
 
@@ -252,7 +243,7 @@ Kısa, öz ve dostça yanıtlar ver."""
         import tempfile
         import os
 
-        deepgram_key = config.deepgram_key or os.getenv("DEEPGRAM_API_KEY", "")
+        deepgram_key = get_env("DEEPGRAM_API_KEY")
         if not deepgram_key:
             logger.warning("DEEPGRAM_API_KEY not set")
             return None
@@ -446,14 +437,15 @@ def health():
 
 
 def run_flask():
-    logger.info(f"Sync API starting on port {config.port}")
-    sync_app.run(host="0.0.0.0", port=config.port, use_reloader=False, threaded=True)
+    port = int(get_env("PORT", "8080"))
+    logger.info(f"Sync API starting on port {port}")
+    sync_app.run(host="0.0.0.0", port=port, use_reloader=False, threaded=True)
 
 
 # ==================== TELEGRAM BOT ====================
 class RailwayBot:
     def __init__(self):
-        self.groq = GroqAgent(config.groq_key)
+        self.groq = GroqAgent(get_env("GROQ_API_KEY"))
 
     async def start(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         user_id = update.effective_user.id
@@ -679,9 +671,8 @@ Sıklık seçenekleri:
         # Debug log
         logger.info(f"=== VOICE MESSAGE RECEIVED ===")
         logger.info(f"User ID: {user_id}, Duration: {duration}s")
-        logger.info(f"Config deepgram_key exists: {bool(config.deepgram_key)}")
-        logger.info(f"Env DEEPGRAM_API_KEY exists: {bool(os.getenv('DEEPGRAM_API_KEY'))}")
-        logger.info(f"Final key: {config.deepgram_key or os.getenv('DEEPGRAM_API_KEY', 'MISSING')[:10]}...")
+        logger.info(f"get_env(DEEPGRAM_API_KEY) exists: {bool(get_env('DEEPGRAM_API_KEY'))}")
+        logger.info(f"Key preview: {get_env('DEEPGRAM_API_KEY', 'MISSING')[:10]}...")
 
         # 10 dakikadan uzunsa reddet
         if duration > 600:
@@ -706,7 +697,7 @@ Sıklık seçenekleri:
             if not transcript:
                 await update.message.reply_text("❌ Ses anlaşılamadı (teknik sorun)")
                 # API key yoksa bilgi ver
-                if not config.deepgram_key and not os.getenv('DEEPGRAM_API_KEY'):
+                if not get_env('DEEPGRAM_API_KEY'):
                     await update.message.reply_text("⚠️ API Key eksik, Railway'e eklenmeli")
                 return
 
@@ -911,11 +902,14 @@ async def check_routines_job(app: Application):
 def main():
     global storage
 
-    if not config.validate():
-        logger.error("Config error!")
+    telegram_token = get_env("TELEGRAM_TOKEN")
+    groq_key = get_env("GROQ_API_KEY")
+
+    if not telegram_token or not groq_key:
+        logger.error("TELEGRAM_TOKEN or GROQ_API_KEY not set!")
         sys.exit(1)
 
-    storage = RailwayStorage(config.storage_path)
+    storage = RailwayStorage(get_env("RAILWAY_VOLUME_URL", "/data/storage"))
 
     # Flask thread
     flask_thread = threading.Thread(target=run_flask, daemon=False)
@@ -924,7 +918,7 @@ def main():
 
     # Telegram bot
     bot = RailwayBot()
-    app = Application.builder().token(config.telegram_token).build()
+    app = Application.builder().token(telegram_token).build()
 
     # Handlers
     app.add_handler(CommandHandler("start", bot.start))
@@ -946,8 +940,8 @@ def main():
 
     logger.info("=" * 50)
     logger.info("Railway Bot + Reminder System Starting...")
-    logger.info(f"Storage: {config.storage_path}")
-    logger.info(f"Sync API: Port {config.port}")
+    logger.info(f"Storage: {get_env('RAILWAY_VOLUME_URL', '/data/storage')}")
+    logger.info(f"Sync API: Port {get_env('PORT', '8080')}")
     logger.info("AI: Groq Llama 3.3")
     logger.info("Reminders: Active")
     logger.info("=" * 50)
