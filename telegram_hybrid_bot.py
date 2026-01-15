@@ -2103,26 +2103,29 @@ def main():
 
     telegram_token = get_env("TELEGRAM_TOKEN")
     groq_key = get_env("GROQ_API_KEY")
+    
+    # Railway otomatik olarak PUBLIC_URL veya RAILWAY_PUBLIC_DOMAIN sağlar
+    webhook_host = get_env("RAILWAY_PUBLIC_DOMAIN", "")
+    port = int(get_env("PORT", "8080"))
 
     if not telegram_token or not groq_key:
         logger.error("TELEGRAM_TOKEN or GROQ_API_KEY not set!")
         sys.exit(1)
+    
+    if not webhook_host:
+        logger.warning("RAILWAY_PUBLIC_DOMAIN not set - webhook mode requires public URL!")
+        logger.warning("Falling back to polling mode (not recommended for production)")
 
     storage = RailwayStorage(get_env("RAILWAY_VOLUME_URL", "/data/storage"))
 
-    # Flask thread
-    flask_thread = threading.Thread(target=run_flask, daemon=False)
-    flask_thread.start()
-    logger.info("Sync API thread started")
-
     # Telegram bot
-    logger.info("[DEBUG] Creating RailwayBot...")
+    logger.info("[INIT] Creating RailwayBot...")
     bot = RailwayBot(storage)
-    logger.info("[DEBUG] RailwayBot created")
+    logger.info("[INIT] RailwayBot created")
 
-    logger.info("[DEBUG] Building Telegram Application...")
+    logger.info("[INIT] Building Telegram Application...")
     app = Application.builder().token(telegram_token).build()
-    logger.info("[DEBUG] Application built")
+    logger.info("[INIT] Application built")
 
     # [Architecture] Bind bot to app post-init to avoid circularity
     bot.bind_app(app)
@@ -2150,6 +2153,16 @@ def main():
             BotCommand("clear", "Temizlik yap")
         ]
         await application.bot.set_my_commands(commands)
+        
+        # Webhook'u ayarla veya temizle
+        if webhook_host:
+            webhook_url = f"https://{webhook_host}/telegram-webhook"
+            await application.bot.set_webhook(url=webhook_url, allowed_updates=Update.ALL_TYPES)
+            logger.info(f"[WEBHOOK] Set webhook to: {webhook_url}")
+        else:
+            await application.bot.delete_webhook(drop_pending_updates=True)
+            logger.info("[POLLING] Webhook cleared, using polling mode")
+        
         logger.info("[UX] Bot commands registered in Menu button")
 
     app.post_init = post_init
@@ -2171,22 +2184,67 @@ def main():
     # Rutin kontrolü - her dakika
     job_queue.run_repeating(check_routines_job, interval=60, first=15)
 
-    # Günlük özet - her sabah 08:30
-    # job_queue.run_daily(daily_digest_job, time=datetime.time(hour=8, minute=30))
-    # NOT: Railway zamanı UTC olduğu için 05:30 UTC = 08:30 TSİ
+    # Günlük özet - her sabah 08:30 TSİ (05:30 UTC)
     from datetime import time as dt_time
     job_queue.run_daily(daily_digest_job, time=dt_time(hour=5, minute=30))
 
     logger.info("=" * 50)
-    logger.info("Railway Bot + Reminder System Starting...")
+    logger.info("🚀 MallibuSupportbot Starting...")
     logger.info(f"Storage: {get_env('RAILWAY_VOLUME_URL', '/data/storage')}")
-    logger.info(f"Sync API: Port {get_env('PORT', '8080')}")
+    logger.info(f"Port: {port}")
+    logger.info(f"Mode: {'WEBHOOK' if webhook_host else 'POLLING'}")
+    if webhook_host:
+        logger.info(f"Webhook URL: https://{webhook_host}/telegram-webhook")
     logger.info("AI: Groq Llama 3.3")
     logger.info("Reminders: Active")
     logger.info("=" * 50)
 
-    app.run_polling(allowed_updates=Update.ALL_TYPES, drop_pending_updates=True)
+    if webhook_host:
+        # ==================== WEBHOOK MODE ====================
+        # Telegram webhook + Flask sync API birleşik sunucu
+        
+        @sync_app.route("/telegram-webhook", methods=["POST"])
+        def telegram_webhook():
+            """Telegram'dan gelen güncellemeleri işle"""
+            try:
+                update = Update.de_json(request.get_json(force=True), app.bot)
+                asyncio.run(app.process_update(update))
+                return "OK", 200
+            except Exception as e:
+                logger.error(f"Webhook error: {e}")
+                return "Error", 500
+        
+        @sync_app.route("/health", methods=["GET"])
+        def health():
+            """Railway health check endpoint"""
+            return jsonify({"status": "healthy", "mode": "webhook", "bot": "MallibuSupportbot"}), 200
+        
+        # Flask sunucusunu başlat (webhook + sync API)
+        logger.info(f"[SERVER] Starting unified Flask server on port {port}")
+        
+        # Async initialization gerekiyor
+        async def async_init():
+            await app.initialize()
+            await app.start()
+            if app.post_init:
+                await app.post_init(app)
+        
+        asyncio.run(async_init())
+        
+        # Flask sync API + Telegram webhook aynı sunucuda
+        sync_app.run(host="0.0.0.0", port=port, use_reloader=False, threaded=True)
+        
+    else:
+        # ==================== POLLING MODE (FALLBACK) ====================
+        # Flask thread
+        flask_thread = threading.Thread(target=run_flask, daemon=True)
+        flask_thread.start()
+        logger.info("Sync API thread started")
+        
+        # Polling başlat
+        app.run_polling(allowed_updates=Update.ALL_TYPES, drop_pending_updates=True)
 
 
 if __name__ == "__main__":
     main()
+
