@@ -1,0 +1,756 @@
+<!DOCTYPE html>
+<html lang="tr">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=5.0">
+    <title>Malibu PRZ Suite - Hibrit Sistem</title>
+
+    <!-- Tailwind CSS CDN -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- React & Babel CDNs -->
+    <script src="https://unpkg.com/react@18/umd/react.development.js"></script>
+    <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+
+    <!-- Adobe Fonts / Google Fonts -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link
+        href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;500;600;700;800&family=Inter:wght@400;700;900&display=swap"
+        rel="stylesheet">
+
+    <!-- Technical SEO: Meta Tags -->
+    <meta name="description"
+        content="Malibu Hibrit TradingView İndikatörleri. Harmonik PRZ ve SMC Malibu ile kurumsal onaylı teknik analiz sistemi. Smart Money akışıyla uyumlu kârlı stratejiler.">
+    <meta name="keywords"
+        content="TradingView indikatörleri, SMC Malibu, Harmonik PRZ, Smart Money Concepts, TradingView strateji, Teknik analiz indikatörü">
+    <meta name="author" content="Malibu">
+    <link rel="canonical" href="https://malibuuuu.github.io/Malibu_Landing_Web/">
+
+    <!-- Social Media: Open Graph / Facebook -->
+    <meta property="og:type" content="website">
+    <meta property="og:url" content="https://malibuuuu.github.io/Malibu_Landing_Web/">
+    <meta property="og:title" content="Malibu PRZ Suite - Hibrit Sistem">
+    <meta property="og:description"
+        content="Harmonik PRZ + SMC Malibu = Kurumsal Onaylı Formasyonlar. TradingView'da profesyonel hibrit sistem.">
+    <meta property="og:image"
+        content="C:/Users/malib/.gemini/antigravity/brain/ef4ea883-d68f-4bd1-a742-8fa26dc4a3d3/uploaded_image_1768097096804.png">
+
+    <!-- Social Media: Twitter -->
+    <meta property="twitter:card" content="summary_large_image">
+    <meta property="twitter:url" content="https://malibuuuu.github.io/Malibu_Landing_Web/">
+    <meta property="twitter:title" content="Malibu PRZ Suite - Hibrit Sistem">
+    <meta property="twitter:description" content="Harmonik PRZ + SMC Malibu = Kurumsal Onaylı Formasyonlar.">
+    <meta property="twitter:image"
+        content="C:/Users/malib/.gemini/antigravity/brain/ef4ea883-d68f-4bd1-a742-8fa26dc4a3d3/uploaded_image_1768097096804.png">
+
+    <!-- Structured Data: JSON-LD -->
+    <script type="application/ld+json">
+  {
+    "@context": "https://schema.org/",
+    "@type": "Product",
+    "name": "Malibu PRZ Suite Hybrid System",
+    "image": "C:/Users/malib/.gemini/antigravity/brain/ef4ea883-d68f-4bd1-a742-8fa26dc4a3d3/uploaded_image_1768097096804.png",
+    "description": "Premium TradingView indicators combining Harmonic Geometry and Smart Money Concepts.",
+    "brand": {
+      "@type": "Brand",
+      "name": "Malibu"
+    },
+    "offers": {
+      "@type": "Offer",
+      "url": "https://malibuuuu.github.io/Malibu_Landing_Web/",
+      "priceCurrency": "USD",
+      "price": "30.00",
+      "availability": "https://schema.org/InStock"
+    }
+  }
+  </script>
+</head>
+
+<body>
+    <div id="root"></div>
+
+    <script type="text/babel">
+        const { useState, useEffect, Component } = React;
+        const { createRoot } = ReactDOM;
+
+        // Icons Component
+        const Icons = {
+            Youtube: () => (
+                <svg className="w-6 h-6" fill="currentColor" viewBox="0 0 24 24"><path d="M23.498 6.186a3.016 3.016 0 0 0-2.122-2.136C19.505 3.545 12 3.545 12 3.545s-7.505 0-9.377.505A3.017 3.017 0 0 0 .502 6.186C0 8.07 0 12 0 12s0 3.93.502 5.814a3.016 3.016 0 0 0 2.122 2.136c1.871.505 9.376.505 9.376.505s7.505 0 9.377-.505a3.015 3.015 0 0 0 2.122-2.136C24 15.93 24 12 24 12s0-3.93-.502-5.814zM9.545 15.568V8.432L15.818 12l-6.273 3.568z" /></svg>
+            ),
+            Check: () => (
+                <svg className="w-4 h-4" fill="none" stroke="currentColor" strokeWidth="3" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" /></svg>
+            ),
+            Play: () => (
+                <svg className="w-8 h-8" fill="currentColor" viewBox="0 0 24 24"><path d="M8 5v14l11-7z" /></svg>
+            ),
+            Telegram: () => (
+                <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 24 24"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm4.64 6.8c-.15 1.58-.8 5.42-1.13 7.19-.14.75-.42 1-.68 1.03-.58.05-1.02-.38-1.58-.75-.88-.58-1.38-.94-2.23-1.5-.99-.65-.35-1.01.22-1.59.15-.15 2.71-2.48 2.76-2.69a.2.2 0 00-.05-.18c-.06-.05-.14-.03-.21-.02-.09.02-1.49.95-4.22 2.79-.4.27-.76.41-1.08.4-.36-.01-1.04-.2-1.55-.37-.63-.2-1.13-.31-1.08-.66.02-.18.27-.36.74-.55 2.92-1.27 4.86-2.11 5.83-2.51 2.78-1.16 3.35-1.36 3.73-1.36.08 0 .27.02.39.12.1.08.13.19.14.27-.01.06.01.24 0 .38z" /></svg>
+            ),
+            Copy: () => (
+                <svg className="w-4 h-4" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" /></svg>
+            ),
+            ZapSmall: () => (
+                <svg className="w-5 h-5 text-amber-500" fill="currentColor" viewBox="0 0 24 24"><path d="M13 10V3L4 14h7v7l9-11h-7z" /></svg>
+            )
+        };
+
+        // Resiliency: safeGet helper for data protection
+        const safeGet = (obj, path, fallback = "") => {
+            try { return path.split('.').reduce((acc, part) => acc && acc[part], obj) || fallback; }
+            catch (e) { return fallback; }
+        };
+
+        // Resiliency: ErrorBoundary for component isolation
+        class ErrorBoundary extends Component {
+            constructor(props) { super(props); this.state = { hasError: false }; }
+            static getDerivedStateFromError(error) { return { hasError: true }; }
+            render() {
+                if (this.state.hasError) {
+                    return (
+                        <div className="p-8 bg-red-900/20 border border-red-500/50 rounded-2xl text-center my-4">
+                            <h2 className="text-amber-500 font-black mb-2 uppercase">Protocol: Graceful Degradation</h2>
+                            <p className="text-slate-400 text-xs">Bu bölüm geçici bir hata nedeniyle statik moda geçti. Sistem geri kalanı aktif.</p>
+                            <button onClick={() => window.location.reload()} className="mt-4 text-[10px] text-white underline">Yenile</button>
+                        </div>
+                    );
+                }
+                return this.props.children;
+            }
+        }
+
+        // Translations Object
+        const translations = {
+            tr: {
+                academy: {
+                    title: "Malİbu Academy",
+                    desc: "Harmanik PRZ ve SMC Malibu sistemlerini en ince detayına kadar öğrenin. Stratejinizi kurumsal seviyeye taşıyın.",
+                    vid1Label: "EĞİTİM SERİSİ",
+                    vid1Title: "Harmonİc PRZ Rehberİ",
+                    vid2Label: "STRATEJİ REHBERİ",
+                    vid2Title: "SMT / ICT Yöntemİ",
+                    watchOnYoutube: "PLAYLİSTİ BAŞLAT",
+                    cta: "Eğİtİmlerİ Kaçırma"
+                },
+                pricing: {
+                    title: "2 Pro Araç, 1 Fiyat",
+                    sub: "Harmonic PRZ + SMC Malibu = Kurumsal Onaylı İşlemler",
+                    promo: "🎁 Her Harmonic PRZ satın alımında SMC Malibu BEDAVA!",
+                    buy: "Satın Al",
+                    plans: [
+                        { name: "Aylık", price: "$30", period: "/ Ay", features: ["Harmonic PRZ (Tam Erişim)", "SMC Malibu (BEDAVA)", "Tüm Formasyonlar"] },
+                        { name: "3 Aylık", price: "$79", period: "/ 3 Ay", badge: "11$ TASARRUF!", features: ["Harmonic PRZ (Tam Erişim)", "SMC Malibu (BEDAVA)", "Tüm Özellikler"] },
+                        { name: "Yıllık", price: "$269", period: "/ Yıl", badge: "81$ TASARRUF EDİN!", popular: true, features: ["Harmonic PRZ (Tam Erişim)", "SMC Malibu (BEDAVA)", "3 Ay Bedava", "Düzenli Güncellemeler"] }
+                    ]
+                },
+                payment: {
+                    title: "TRC20 USDT",
+                    sub: "Hızlı ve güvenli kripto ödeme",
+                    instruction: "Seçtiğiniz plan tutarını bu adrese gönderin:",
+                    warning: "Lütfen sadece TRC20 ağını kullanın.",
+                    cta: "📋 Adresi Kopyala",
+                    telegram: "📱 Telegram'dan Ulaşın"
+                },
+                cta: {
+                    trial: "Deneme Talebi"
+                },
+                manifesto: {
+                    title: "Malibu Hybrid Engine: Kuantİtatİf Manifesto",
+                    sub: "Veri Odaklı Karar Verme Mekanizması",
+                    sections: [
+                        {
+                            h: "1. Stratejİk Özet: The Edge",
+                            p: "Malibu Hybrid Engine bir tahmin aracı değildir; geometrik uyumun (Harmonic PRZ) yapısal konsensüs ile (SMC) buluştuğu kurumsal likidite ceplerini tanımlamak için tasarlanmış istatistiksel bir filtreleme katmanıdır."
+                        },
+                        {
+                            h: "2. Gürültü Filtreleme: Yüksek-Entropİ Karşıtı",
+                            p: "Algoritmamız, sadece Fibonacci toleranslarını karşılayan formasyonları işler. Yapısal MSS (Market Structure Shift) ile hizalanmayan sinyalleri reddederek gürültüyü elimine eder."
+                        },
+                        {
+                            h: "3. Haksız Avantaj: Asİmetrİk Bİlgİ",
+                            p: "SMC ayak izlerini deşifre ederek, perakende yatırımcının 'en çok canının yanacağı' likidite seviyelerinde (Inducement & Breakers) konumlanmanızı sağlar."
+                        },
+                        {
+                            h: "4. Olasılıksal Üstünlük",
+                            p: "Sistem, fiyatı çizgi segmentleri olarak değil, bir likidite fonksiyonu olarak görür. PRZ, SMC ile doğrulanmazsa işlem yoktur. Karar felci ve duygusal önyargı tamamen devredışıdır."
+                        }
+                    ],
+                    footer: "Kuantitatif elitler için geliştirildi. Umutla değil, veriyle işlem yapanlar için optimize edildi."
+                },
+                principles: {
+                    title: "Fİnansal Eğİtmen Gözüyle: Lİkİdİte ve Akış",
+                    sub: "Algoritmik Karar Alma Mimarisi",
+                    items: [
+                        {
+                            h: "Displacement & Momentum",
+                            p: "Fiyatın belirli bir bölgeden hacimli uzaklaşması (Displacement), akıllı paranın o yöndeki niyetini ele verir. Algoritmamız bu 'agresif' mum gövdelerini tarayarak gürültüyü eler."
+                        },
+                        {
+                            h: "Order Block & Mİtİgatİon",
+                            p: "Kurumsal emirlerin beklediği bölgeler (Order Blocks) ve bu bölgelerin test edilip riskin azaltılması (Mitigation) süreci, reversal noktalarını matematiksel kesinlikle yakalamamızı sağlar."
+                        },
+                        {
+                            h: "FVG & İneffİcİency",
+                            p: "Piyasadaki likidite boşlukları (Fair Value Gaps), fiyatın geri çekilmek zorunda olduğu 'mıknatıs' bölgelerdir. Sistem, bu boşlukların dolma olasılığını anlık hesaplar."
+                        }
+                    ]
+                },
+                trust: {
+                    title: "Malİbu Integrİty Protocol",
+                    sub: "Yazılım Denetçİsİ Raporu ve Etİk Taahhüt",
+                    items: [
+                        {
+                            label: "0% REPAINT",
+                            title: "Sİnyal Sabİtlİğİ",
+                            desc: "Grafikte ne görüyorsanız, o sinyal orada oluştuğu andan itibaren asla yer değiştirmez veya silinmez. Geçmiş verideki başarı, canlıdaki performansın aynasıdır."
+                        },
+                        {
+                            label: "CAUSALITY",
+                            title: "Nedensellİk İlkesİ",
+                            desc: "Algoritma, geleceği tahmin etmeye değil, mevcut veriyi doğrusal nedensellik içinde yorumlamaya programlanmıştır. 'Look-ahead bias' (geleceği görme hatası) kod yapımızda fiziksel olarak imkansızdır."
+                        },
+                        {
+                            label: "REAL-TIME",
+                            title: "Gerçek Zamanlı Denetİm",
+                            desc: "Veri akışı milisaniyelik gecikmelerle işlenir. Malibu, bir 'tahminci' değil, piyasanın o anki kurumsal niyetini deşifre eden bir yazılım denetçisidir."
+                        }
+                    ],
+                    footer: "Geleceği vaat etmiyoruz, mevcut veriyi en doğru şekilde yorumlamayı vaat ediyoruz."
+                }
+            },
+            en: {
+                academy: {
+                    title: "Malibu Academy",
+                    desc: "Master Harmonic PRZ and SMC Malibu systems down to the finest detail. Elevate your strategy to the institutional level.",
+                    vid1Label: "EDUCATION SERIES",
+                    vid1Title: "Harmonic PRZ Guide",
+                    vid2Label: "STRATEGY GUIDE",
+                    vid2Title: "SMT / ICT Method",
+                    watchOnYoutube: "START PLAYLIST",
+                    cta: "Don’t Miss Education"
+                },
+                pricing: {
+                    title: "2 Pro Tools, 1 Price",
+                    sub: "Harmonic PRZ + SMC Malibu = Institutional Confirmed Trades",
+                    promo: "🎁 FREE SMC Malibu with every Harmonic PRZ purchase!",
+                    buy: "Buy Now",
+                    plans: [
+                        { name: "Monthly", price: "$30", period: "/ Mo", features: ["Harmonic PRZ (Full Access)", "SMC Malibu (FREE)", "All Formations"] },
+                        { name: "3 Months", price: "$79", period: "/ 3 Mo", badge: "$11 SAVINGS!", features: ["Harmonic PRZ (Full Access)", "SMC Malibu (FREE)", "All Features"] },
+                        { name: "Yearly", price: "$269", period: "/ Yr", badge: "SAVE $81!", popular: true, features: ["Harmonic PRZ (Full Access)", "SMC Malibu (FREE)", "3 Months Free", "Regular Updates"] }
+                    ]
+                },
+                payment: {
+                    title: "TRC20 USDT",
+                    sub: "Fast and secure crypto payment",
+                    instruction: "Send the plan amount to this address:",
+                    warning: "Please use TRC20 network only.",
+                    cta: "📋 Copy Address",
+                    telegram: "📱 Contact via Telegram"
+                },
+                cta: {
+                    trial: "Request Trial"
+                },
+                manifesto: {
+                    title: "Malibu Hybrid Engine: Quantİtatİve Manifesto",
+                    sub: "Data-Driven Decision Mechanism",
+                    sections: [
+                        {
+                            h: "1. Executive Summary: The Edge",
+                            p: "Malibu Hybrid Engine is not a predictive tool; it is a statistical filtering layer designed to identify institutional liquidity pockets where geometric harmony meets structural consensus."
+                        },
+                        {
+                            h: "2. Noise Filtration: Anti-Entropy",
+                            p: "Our algorithm processes only formations that meet strict Fibonacci tolerances, filtering out noise by rejecting signals not aligned with structural MSS."
+                        },
+                        {
+                            h: "3. Unfair Advantage: Asymmetry",
+                            p: "By decoding SMC footprints, it positions you at liquidity levels (Inducement & Breakers) where retail pain is maximized, providing institutional precision."
+                        },
+                        {
+                            h: "4. Probabilistic Superiority",
+                            p: "The system treats price as a function of liquidity, not lines. No SMC validation means no trade. Cognitive load and emotional bias are effectively neutralized."
+                        }
+                    ],
+                    footer: "Developed for the Quantitative Elite. Optimized for those who trade data, not hope."
+                },
+                principles: {
+                    title: "Fİnancİal Instructor's Vİew: Lİquİdİty & Flow",
+                    sub: "Algorithmic Decision Architecture",
+                    items: [
+                        {
+                            h: "Dİsplacement & Momentum",
+                            p: "Aggressive price movement from a zone (Displacement) reveals institutional intent. Our algorithm scans these expansive candle bodies to filter out volatility noise."
+                        },
+                        {
+                            h: "Order Block & Mİtİgatİon",
+                            p: "Zones where institutional orders reside (Order Blocks) and the subsequent testing/risk reduction (Mitigation) allow us to capture reversal points with mathematical precision."
+                        },
+                        {
+                            h: "FVG & İneffİcİency",
+                            p: "Market liquidity gaps (Fair Value Gaps) are 'magnet' zones price must eventually rebalance. The system calculates the probability of these gaps filling in real-time."
+                        }
+                    ]
+                },
+                trust: {
+                    title: "Malibu Integrity Protocol",
+                    sub: "Software Auditor's Report & Ethical Commitment",
+                    items: [
+                        {
+                            label: "0% REPAINT",
+                            title: "Signal Stability",
+                            desc: "What you see on the chart never moves or disappears from the moment it is formed. Historical success is a direct reflection of real-time performance."
+                        },
+                        {
+                            label: "CAUSALITY",
+                            title: "Principle of Causality",
+                            desc: "The algorithm is programmed to interpret current data within linear causality, not predict the future. 'Look-ahead bias' is physically impossible within our code architecture."
+                        },
+                        {
+                            label: "REAL-TIME",
+                            title: "Real-Time Auditing",
+                            desc: "Data flow is processed with millisecond latency. Malibu is not a 'predictor', but a software auditor that deciphers the market's current institutional intent."
+                        }
+                    ],
+                    footer: "We don't promise the future; we promise to interpret current data with maximum accuracy."
+                }
+            }
+        };
+
+        // VideoCard Component with Article semantic
+        const VideoCard = ({ id, label, title, playlistUrl, accentColor, watchText, customImg }) => {
+            const [imgSrc, setImgSrc] = useState(customImg || `https://img.youtube.com/vi/${id}/maxresdefault.jpg`);
+            const [isError, setIsError] = useState(!id && !customImg);
+
+            const handleImageError = () => {
+                if (!isError) {
+                    setImgSrc(`https://img.youtube.com/vi/${id}/hqdefault.jpg`);
+                    setIsError(true);
+                }
+            };
+
+            return (
+                <article className="group flex flex-col items-start w-full">
+                    <a
+                        href={playlistUrl}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="w-full aspect-video rounded-3xl overflow-hidden border border-white/10 relative bg-[#0A0C14] mb-6 shadow-2xl block transition-transform duration-500 hover:scale-[1.02]"
+                    >
+                        {!isError ? (
+                            <img
+                                src={imgSrc}
+                                alt={title}
+                                className="w-full h-full object-cover opacity-80 group-hover:opacity-100 transition-all duration-700"
+                                onError={handleImageError}
+                            />
+                        ) : (
+                            <div className="w-full h-full flex items-center justify-center bg-gradient-to-br from-slate-900 to-black">
+                                <div className="text-slate-700 text-[10px] font-bold uppercase tracking-widest">Görsel Yüklenemedi</div>
+                            </div>
+                        )}
+
+                        <div className="absolute inset-0 flex items-center justify-center">
+                            <div className={`w-16 h-16 rounded-full flex items-center justify-center text-black opacity-0 group-hover:opacity-100 scale-50 group-hover:scale-100 transition-all duration-300 shadow-2xl`} style={{ backgroundColor: accentColor }}>
+                                <Icons.Play />
+                            </div>
+                        </div>
+                        <div className="absolute inset-0 bg-gradient-to-t from-black/80 via-transparent to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-300"></div>
+                    </a>
+
+                    <div className="flex w-full justify-between items-end px-2">
+                        <div className="text-left">
+                            <span className="text-[10px] font-black tracking-widest block mb-1 uppercase" style={{ color: accentColor }}>{label}</span>
+                            <h3 className="text-white font-black text-xl uppercase italic tracking-tighter leading-none">{title}</h3>
+                        </div>
+                        <button className="px-5 py-2.5 border border-white/10 rounded-lg text-[10px] font-black text-slate-400 group-hover:bg-white group-hover:text-black group-hover:border-white transition-all uppercase tracking-tighter">
+                            {watchText}
+                        </button>
+                    </div>
+                </article>
+            );
+        };
+
+        // Main App
+        const App = () => {
+            const [lang, setLang] = useState('tr');
+            const t = translations[lang] || translations['tr'];
+
+            useEffect(() => {
+                document.documentElement.lang = lang;
+            }, [lang]);
+
+            const copyAddress = () => {
+                try {
+                    const address = "TKUvYuzdZvkq6ksgPxfDRsUQE4vYjnEcnL";
+                    navigator.clipboard.writeText(address);
+                    alert(lang === 'tr' ? "Adres kopyalandı!" : "Address copied!");
+                } catch (e) {
+                    console.error("Critical Failure: Clipboard API", e);
+                    alert("Backup Protocol: " + "TKUvYuzdZvkq6ksgPxfDRsUQE4vYjnEcnL");
+                }
+            };
+
+            return (
+                <ErrorBoundary>
+                    <div className="min-h-screen bg-[#02040A] font-['Inter'] text-slate-300 selection:bg-amber-500/30">
+                        {/* Nav */}
+                        <nav className="fixed top-0 left-0 w-full z-[90] backdrop-blur-2xl bg-black/40 border-b border-white/5 px-6 py-4">
+                            <div className="max-w-7xl mx-auto flex items-center justify-between">
+                                <div className="flex items-center gap-8">
+                                    <div className="text-2xl font-black text-white uppercase italic tracking-tighter font-['Plus_Jakarta_Sans']">Malibu</div>
+                                    <div className="flex items-center gap-4">
+                                        <button onClick={() => setLang('tr')} className={`min-h-[44px] px-3 py-1 rounded-lg text-[10px] font-black tracking-[0.2em] transition-all ${lang === 'tr' ? 'bg-amber-500 text-black shadow-lg shadow-amber-500/10' : 'bg-white/5 text-slate-400'}`}>TR</button>
+                                        <button onClick={() => setLang('en')} className={`min-h-[44px] px-3 py-1 rounded-lg text-[10px] font-black tracking-[0.2em] transition-all ${lang === 'en' ? 'bg-amber-500 text-black shadow-lg shadow-amber-500/10' : 'bg-white/5 text-slate-400'}`}>EN</button>
+                                    </div>
+                                </div>
+                                <div className="flex items-center gap-4 md:gap-8 ml-auto">
+                                    <a href="#youtube" className="hidden md:block text-[10px] font-black text-slate-400 hover:text-white uppercase tracking-widest transition-colors">Academy</a>
+                                    <a href="#plans" className="hidden md:block text-[10px] font-black text-slate-400 hover:text-white uppercase tracking-widest transition-colors">Plans</a>
+                                    <a
+                                        href="https://t.me/MallibuSupportbot"
+                                        target="_blank"
+                                        rel="noopener noreferrer"
+                                        className="min-h-[44px] px-6 py-3 bg-white text-black text-[10px] font-black rounded-xl uppercase tracking-widest hover:bg-amber-500 transition-all shadow-xl shadow-white/5"
+                                    >
+                                        {safeGet(t, 'cta.trial', 'Deneme Talebi')}
+                                    </a>
+                                </div>
+                            </div>
+                        </nav>
+
+                        <main>
+                            {/* Hero */}
+                            <section className="relative pt-48 pb-32 px-6 overflow-hidden">
+                                <div className="absolute top-0 left-1/2 -translate-x-1/2 w-[1200px] h-[600px] bg-amber-500/5 blur-[120px] rounded-full -z-10"></div>
+                                <div className="max-w-7xl mx-auto text-center">
+                                    <div className="inline-flex items-center gap-3 px-6 py-3 bg-white/5 border border-white/10 rounded-full mb-16 animate-pulse">
+                                        <span className="w-2 h-2 rounded-full bg-amber-500 shadow-[0_0_15px_rgba(245,158,11,0.5)]"></span>
+                                        <p className="text-[10px] font-black text-slate-500 tracking-widest uppercase">🔥 2 PRO ARAÇ, 1 FİYAT - HİBRİT SİSTEM</p>
+                                    </div>
+
+                                    <h1 className="text-5xl md:text-7xl lg:text-8xl font-black text-white mb-12 uppercase tracking-tighter leading-tight font-['Plus_Jakarta_Sans'] flex flex-col items-center">
+                                        <span className="block opacity-90">HarmonicPRZ <span className="text-transparent bg-clip-text bg-gradient-to-r from-amber-500 to-amber-200">Malibu</span></span>
+                                        <span className="text-4xl md:text-5xl text-amber-500/20 my-6 select-none font-light tracking-[0.5em] animate-pulse">+</span>
+                                        <span class="block italic pb-4">ICT SMC <span class="text-transparent bg-clip-text bg-gradient-to-r from-cyan-400 to-blue-500 pr-4 inline-block">Malibu</span></span>
+                                    </h1>
+
+                                    <p className="max-w-xl mx-auto text-slate-400 text-base md:text-lg font-medium leading-relaxed mb-6 px-4 uppercase tracking-[0.1em] opacity-70">
+                                        Harmonik PRZ + SMC Akıllı Para = <span className="text-white/80 border-b border-white/10 pb-1">Kurumsal Onaylı Formasyonlar</span>
+                                    </p>
+
+                                    <div className="flex flex-col sm:flex-row items-center justify-center gap-6 mt-12 px-6">
+                                        <a
+                                            href="https://t.me/MallibuSupportbot"
+                                            target="_blank"
+                                            rel="noopener noreferrer"
+                                            className="group relative w-full sm:w-auto min-h-[64px] px-12 py-6 bg-gradient-to-r from-amber-500 to-amber-600 text-black font-black rounded-2xl uppercase tracking-[0.2em] transition-all hover:scale-105 active:scale-95 shadow-[0_20px_50px_rgba(245,158,11,0.3)] hover:shadow-[0_25px_60px_rgba(245,158,11,0.4)] overflow-hidden"
+                                        >
+                                            <span className="relative z-10 flex items-center justify-center gap-3">
+                                                <Icons.Telegram /> {safeGet(t, 'cta.trial', 'Deneme Talebi')}
+                                            </span>
+                                            <div className="absolute inset-0 bg-white/20 translate-x-[-100%] group-hover:translate-x-[100%] transition-transform duration-700"></div>
+                                        </a>
+                                    </div>
+                                </div>
+                            </section>
+
+                            {/* Academy */}
+                            <section id="youtube" className="py-24 px-6 relative bg-white/[0.01] border-y border-white/5">
+                                <div className="max-w-6xl mx-auto text-center">
+                                    <div className="flex items-center justify-center gap-4 mb-8">
+                                        <span className="text-4xl">📺</span>
+                                        <h2 className="text-4xl md:text-6xl font-black text-white/90 uppercase tracking-tighter leading-[1.1] font-['Plus_Jakarta_Sans']">{safeGet(t, 'academy.title')}</h2>
+                                    </div>
+                                    <p className="text-slate-400/80 max-w-xl mx-auto mb-20 text-base md:text-lg leading-[1.6] font-medium">
+                                        {safeGet(t, 'academy.desc')}
+                                    </p>
+
+                                    <div className="grid grid-cols-1 md:grid-cols-2 gap-12 mb-20 text-left">
+                                        <VideoCard
+                                            id="pA06jxW1Tr0"
+                                            label={safeGet(t, 'academy.vid1Label')}
+                                            title={safeGet(t, 'academy.vid1Title')}
+                                            playlistUrl="https://youtube.com/playlist?list=PLHbM_QcCWYuZwRQSrRk_Y_Z_VIK_H_qRf"
+                                            accentColor="#f59e0b"
+                                            watchText={safeGet(t, 'academy.watchOnYoutube')}
+                                        />
+                                        <VideoCard
+                                            id="ict_series"
+                                            label={safeGet(t, 'academy.vid2Label')}
+                                            title={safeGet(t, 'academy.vid2Title')}
+                                            playlistUrl="https://youtube.com/playlist?list=PLHbM_QcCWYuaVAktzYDgO8CtIbR5v1Ei9"
+                                            accentColor="#22d3ee"
+                                            watchText={safeGet(t, 'academy.watchOnYoutube')}
+                                            customImg="./assets/ict_thumbnail.png"
+                                        />
+                                    </div>
+
+                                    <a
+                                        href="https://www.youtube.com/@malibuuuu"
+                                        target="_blank"
+                                        rel="noopener noreferrer"
+                                        className="inline-flex items-center gap-4 px-12 py-6 bg-[#FF0000] hover:bg-[#CC0000] text-white font-black rounded-2xl uppercase tracking-widest transition-all shadow-[0_10px_40px_rgba(255,0,0,0.2)] hover:scale-105 active:scale-95"
+                                    >
+                                        <Icons.Youtube /> 🔔 {safeGet(t, 'academy.cta')}
+                                    </a>
+                                </div>
+                            </section>
+
+                            {/* Manifesto Section */}
+                            <section className="py-32 px-6 bg-[#05070A] relative overflow-hidden">
+                                <div className="absolute top-0 right-0 w-1/2 h-full bg-amber-500/5 blur-[120px] rounded-full -z-10"></div>
+                                <div className="max-w-7xl mx-auto">
+                                    <div className="mb-20">
+                                        <h2 className="text-3xl md:text-5xl font-black text-white/90 uppercase tracking-tighter mb-4 font-['Plus_Jakarta_Sans'] leading-tight">
+                                            {safeGet(t, 'manifesto.title')}
+                                        </h2>
+                                        <p className="text-amber-500 text-xs font-black uppercase tracking-[0.3em] opacity-80">
+                      // {safeGet(t, 'manifesto.sub')}
+                                        </p>
+                                    </div>
+
+                                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-8">
+                                        {(safeGet(t, 'manifesto.sections', []) || []).map((item, i) => (
+                                            <div key={i} className="group p-8 bg-white/[0.02] border border-white/5 rounded-3xl hover:bg-white/[0.04] hover:border-white/10 transition-all duration-500">
+                                                <h3 className="text-amber-500 font-black text-[10px] uppercase tracking-widest mb-6 block border-b border-amber-500/10 pb-4">
+                                                    {item.h}
+                                                </h3>
+                                                <p className="text-slate-400 text-sm leading-relaxed font-medium group-hover:text-slate-200 transition-colors">
+                                                    {item.p}
+                                                </p>
+                                            </div>
+                                        ))}
+                                    </div>
+
+                                    <div className="mt-20 pt-12 border-t border-white/5 flex flex-col md:flex-row justify-between items-center gap-8">
+                                        <p className="text-[10px] text-slate-500 font-black uppercase tracking-[0.2em] italic max-w-lg text-center md:text-left">
+                                            {safeGet(t, 'manifesto.footer')}
+                                        </p>
+                                        <div className="flex items-center gap-4 opacity-30">
+                                            <div className="w-12 h-px bg-white"></div>
+                                            <span className="text-[8px] font-black uppercase tracking-[0.4em]">Quantitative Protocol</span>
+                                        </div>
+                                    </div>
+                                </div>
+                            </section>
+
+                            {/* Technical Principles Section */}
+                            <section className="py-24 px-6 border-t border-white/5">
+                                <div className="max-w-7xl mx-auto text-center md:text-left">
+                                    <div className="mb-16">
+                                        <h2 className="text-3xl md:text-4xl font-black text-white/90 uppercase tracking-tighter font-['Plus_Jakarta_Sans'] leading-tight mb-4">
+                                            {safeGet(t, 'principles.title')}
+                                        </h2>
+                                        <p className="text-slate-500 text-[10px] font-black uppercase tracking-[0.3em]">
+                      // {safeGet(t, 'principles.sub')}
+                                        </p>
+                                    </div>
+
+                                    <div className="grid grid-cols-1 md:grid-cols-3 gap-12">
+                                        {(safeGet(t, 'principles.items', []) || []).map((item, i) => (
+                                            <div key={i} className="relative group">
+                                                <div className="absolute -left-6 top-0 w-1 h-full bg-amber-500/20 group-hover:bg-amber-500 transition-colors"></div>
+                                                <h3 className="text-lg font-black text-white mb-4 uppercase tracking-tight">
+                                                    {item.h}
+                                                </h3>
+                                                <p className="text-slate-400 text-sm leading-relaxed font-medium">
+                                                    {item.p}
+                                                </p>
+                                            </div>
+                                        ))}
+                                    </div>
+                                </div>
+                            </section>
+
+                            {/* Trust & Integrity Section */}
+                            <section className="py-32 px-6 bg-gradient-to-b from-black to-[#05070A] border-y border-white/5 overflow-hidden">
+                                <div className="max-w-7xl mx-auto">
+                                    <div className="flex flex-col md:flex-row justify-between items-end gap-8 mb-20">
+                                        <div className="text-left">
+                                            <h2 className="text-4xl md:text-5xl font-black text-white uppercase tracking-tighter mb-4 font-['Plus_Jakarta_Sans']">
+                                                {safeGet(t, 'trust.title')}
+                                            </h2>
+                                            <p className="text-cyan-500 text-xs font-black uppercase tracking-[0.4em]">
+                        // {safeGet(t, 'trust.sub')}
+                                            </p>
+                                        </div>
+                                        <div className="flex items-center gap-4 px-6 py-3 bg-cyan-500/5 border border-cyan-500/20 rounded-xl">
+                                            <span className="w-2 h-2 rounded-full bg-cyan-500 animate-ping"></span>
+                                            <span className="text-[10px] font-black text-cyan-500 uppercase tracking-widest">System Integrity Verified</span>
+                                        </div>
+                                    </div>
+
+                                    <div className="grid grid-cols-1 md:grid-cols-3 gap-8">
+                                        {(safeGet(t, 'trust.items', []) || []).map((item, i) => (
+                                            <div key={i} className="group p-10 bg-white/[0.01] border border-white/5 rounded-[32px] hover:border-cyan-500/30 transition-all duration-700 relative overflow-hidden">
+                                                <div className="absolute top-0 left-0 w-full h-1 bg-gradient-to-r from-cyan-500/0 via-cyan-500/50 to-cyan-500/0 opacity-0 group-hover:opacity-100 transition-opacity"></div>
+                                                <span className="text-[10px] font-black text-cyan-500/60 uppercase tracking-[0.3em] mb-6 block">{item.label}</span>
+                                                <h3 className="text-xl font-bold text-white mb-4 uppercase tracking-tight group-hover:text-cyan-400 transition-colors">{item.title}</h3>
+                                                <p className="text-slate-400 text-sm leading-relaxed font-medium group-hover:text-slate-300 transition-colors">
+                                                    {item.desc}
+                                                </p>
+                                            </div>
+                                        ))}
+                                    </div>
+
+                                    <div className="mt-20 flex flex-col md:flex-row items-center justify-between gap-12 p-10 bg-white/[0.02] border border-white/5 rounded-[40px] relative">
+                                        <div className="absolute top-0 right-10 -translate-y-1/2 px-4 py-1 bg-cyan-500 text-black text-[9px] font-black uppercase tracking-widest rounded-full">
+                                            Vİzyon Beyanı
+                                        </div>
+                                        <p className="text-lg md:text-xl font-medium text-slate-300 italic tracking-tight text-center md:text-left leading-relaxed">
+                                            "{safeGet(t, 'trust.footer')}"
+                                        </p>
+                                        <div className="flex shrink-0 items-center justify-center w-24 h-24 border-2 border-cyan-500/20 rounded-full relative">
+                                            <div className="absolute inset-2 border border-cyan-500/10 rounded-full animate-[spin_10s_linear_infinite]"></div>
+                                            <span className="text-cyan-500 text-xs font-black uppercase tracking-tighter">Verified</span>
+                                        </div>
+                                    </div>
+                                </div>
+                            </section>
+
+                            {/* Pricing */}
+                            <section id="plans" className="py-40 px-6">
+                                <div className="max-w-7xl mx-auto">
+                                    <div className="text-center mb-28">
+                                        <h2 className="text-4xl md:text-6xl font-black text-white/90 mb-6 font-['Plus_Jakarta_Sans'] uppercase tracking-tight leading-[1.1]">{safeGet(t, 'pricing.title')}</h2>
+                                        <p className="text-slate-500 max-w-xl mx-auto mb-8 font-medium leading-[1.6]">{safeGet(t, 'pricing.sub')}</p>
+                                        <div className="inline-block px-6 py-2 bg-amber-500/10 border border-amber-500/20 text-amber-500 text-[10px] font-black rounded-full uppercase tracking-[0.3em] shadow-lg shadow-amber-500/5">
+                                            {safeGet(t, 'pricing.promo')}
+                                        </div>
+                                    </div>
+
+                                    <div className="grid grid-cols-1 md:grid-cols-3 gap-8 max-w-6xl mx-auto">
+                                        {(safeGet(t, 'pricing.plans', []) || []).map((plan, i) => (
+                                            <article key={i} className={`relative p-12 rounded-[40px] border flex flex-col transition-all duration-500 ${plan?.popular ? 'bg-gradient-to-b from-[#f59e0b]/20 to-black border-[#f59e0b]/40 scale-105 z-10 shadow-[0_30px_100px_rgba(245,158,11,0.15)] ring-2 ring-[#f59e0b]/20' : 'bg-white/[0.02] border-white/5 opacity-80 hover:opacity-100 hover:border-white/10'}`}>
+                                                {plan?.popular && (
+                                                    <div className="absolute -top-6 left-1/2 -translate-x-1/2 px-6 py-2 bg-[#f59e0b] text-black text-[10px] font-black rounded-full uppercase tracking-[0.2em] shadow-2xl">
+                                                        {lang === 'tr' ? 'EN ÇOK TERCİH EDİLEN' : 'MOST POPULAR'}
+                                                    </div>
+                                                )}
+                                                <div className="mb-12">
+                                                    <h3 className="text-slate-500 text-[10px] font-black uppercase tracking-widest mb-4 opacity-60">{plan?.name}</h3>
+                                                    <div className="flex items-baseline gap-1">
+                                                        <span className="text-6xl font-black text-white font-['Plus_Jakarta_Sans'] tracking-tighter">{plan?.price}</span>
+                                                        <span className="text-slate-500 text-xs font-bold uppercase opacity-50">{plan?.period}</span>
+                                                    </div>
+                                                    {plan?.popular && (
+                                                        <div className="mt-2 text-[9px] font-black text-slate-500 uppercase tracking-widest opacity-40 italic">($360 Toplam Değer)</div>
+                                                    )}
+                                                    {plan?.badge && (
+                                                        <div className="mt-4 inline-block px-3 py-1 bg-emerald-500/10 border border-emerald-500/20 text-emerald-500 text-[9px] font-black rounded uppercase tracking-widest">
+                                                            {plan?.badge}
+                                                        </div>
+                                                    )}
+                                                </div>
+                                                <div className="space-y-6 mb-12 flex-grow">
+                                                    {(plan?.features || []).map((f, j) => (
+                                                        <div key={j} className="flex items-start gap-4 text-sm text-slate-400 font-medium group/feat">
+                                                            <div className="mt-1 shrink-0 text-amber-500/50 group-hover/feat:text-amber-500 transition-colors pointer-events-none">
+                                                                <Icons.Check />
+                                                            </div>
+                                                            <span className="group-hover/feat:text-white transition-colors leading-snug">{f}</span>
+                                                        </div>
+                                                    ))}
+                                                </div>
+                                                <a
+                                                    href={`https://t.me/MallibuSupportbot?start=${plan?.price === '$30' ? 'plan_monthly_30' : plan?.price === '$79' ? 'plan_quarterly_79' : 'plan_yearly_269'}`}
+                                                    target="_blank"
+                                                    rel="noopener noreferrer"
+                                                    className={`w-full py-6 rounded-2xl font-black text-xs uppercase tracking-[0.2em] transition-all duration-300 block text-center no-underline ${plan?.popular ? 'bg-[#f59e0b] text-black hover:scale-[1.02]' : 'bg-white/10 text-white hover:bg-white hover:text-black hover:scale-[1.02]'}`}
+                                                >
+                                                    {safeGet(t, 'pricing.buy', 'Satın Al')}
+                                                </a>
+                                            </article>
+                                        ))}
+                                    </div>
+                                </div>
+                            </section>
+
+                            {/* Payment Section */}
+                            <section className="py-24 px-6 bg-black/40 border-t border-white/5">
+                                <div className="max-w-3xl mx-auto text-center">
+                                    <h2 className="text-3xl md:text-4xl font-black text-white/90 mb-4 uppercase font-['Plus_Jakarta_Sans'] tracking-tighter leading-[1.1]">{safeGet(t, 'payment.title')}</h2>
+                                    <p className="text-slate-500 mb-12 text-sm uppercase tracking-[0.2em] opacity-60 leading-[1.6]">{safeGet(t, 'payment.sub')}</p>
+                                    <div className="p-10 rounded-3xl bg-black border border-white/10 shadow-3xl">
+                                        <p className="text-[10px] font-black text-slate-500 uppercase tracking-[.3em] mb-6 opacity-50">{safeGet(t, 'payment.instruction')}</p>
+                                        <div className="bg-white/5 border border-white/5 p-6 rounded-xl font-mono text-amber-500/90 break-all mb-8 select-all shadow-inner text-sm md:text-base">
+                                            TKUvYuzdZvkq6ksgPxfDRsUQE4vYjnEcnL
+                                        </div>
+                                        <div className="flex flex-col sm:flex-row gap-4 justify-center items-stretch sm:items-center">
+                                            <button onClick={copyAddress} className="min-h-[52px] px-10 py-4 bg-white text-black font-black text-xs rounded-xl uppercase tracking-widest hover:bg-amber-500 transition-all flex items-center justify-center gap-2">
+                                                <Icons.Copy /> {safeGet(t, 'payment.cta')}
+                                            </button>
+                                            <a href="https://t.me/MallibuSupportbot" target="_blank" rel="noopener noreferrer" className="min-h-[52px] px-10 py-4 bg-[#24A1DE] text-white font-black text-xs rounded-xl uppercase tracking-widest hover:opacity-80 transition-all flex items-center justify-center gap-2">
+                                                <Icons.Telegram /> {safeGet(t, 'payment.telegram')}
+                                            </a>
+                                        </div>
+                                        <div className="mt-10 flex flex-col md:flex-row items-center justify-center gap-6 text-amber-500/80 font-bold text-[10px] uppercase tracking-widest">
+                                            <div className="flex items-center gap-2"><Icons.Check /> Kurulum Garantİsİ</div>
+                                            <div className="hidden md:block w-px h-4 bg-white/10"></div>
+                                            <div className="flex items-center gap-2"><Icons.Check /> 1-5 Saat İçİnde ErİŞİm</div>
+                                        </div>
+                                        <p className="mt-8 text-[9px] font-black text-red-500/60 uppercase tracking-[.3em]">
+                                            ⚠️ {safeGet(t, 'payment.warning')}
+                                        </p>
+                                    </div>
+                                </div>
+                            </section>
+                        </main>
+
+                        {/* Footer */}
+                        <footer className="py-20 px-6 border-t border-white/5 bg-[#010206]">
+                            <div className="max-w-7xl mx-auto">
+                                <div className="flex flex-col md:flex-row justify-between items-start gap-12 mb-16 px-2">
+                                    <div className="text-left">
+                                        <div className="text-3xl font-black text-white uppercase italic mb-4 font-['Plus_Jakarta_Sans'] tracking-tighter">Malibu</div>
+                                        <p className="text-xs font-bold text-slate-600 tracking-widest uppercase">Hibrit PRZ + SMC Akıllı Para Sİstemİ</p>
+                                    </div>
+                                    <div className="text-[9px] text-slate-700 leading-relaxed uppercase tracking-[.2em] max-w-sm text-left md:text-right">
+                                        © 2024 Malibu. Tüm hakları saklıdır. <br />
+                                        Bu bİr yatırım tavsİyesİ değİldİr. <br />
+                                        TradingView üzerinden bİlgİ amaçlı sunulur.
+                                    </div>
+                                </div>
+                                <div className="w-full h-px bg-white/5 mb-8"></div>
+                                <div className="flex flex-col sm:flex-row items-center justify-between gap-8 opacity-40 hover:opacity-100 transition-opacity">
+                                    <div className="flex items-center gap-6">
+                                        <a href="#youtube" className="text-[10px] font-black uppercase tracking-widest hover:text-white">Academy</a>
+                                        <a href="#plans" className="text-[10px] font-black uppercase tracking-widest hover:text-white">Pricing</a>
+                                    </div>
+
+                                </div>
+                            </div>
+                        </footer>
+
+                        {/* Sticky Floating CTA */}
+                        <div className="fixed bottom-8 right-8 z-[100] group">
+                            <a href="https://t.me/MallibuSupportbot" target="_blank" rel="noopener noreferrer"
+                                className="px-8 py-4 bg-black/60 backdrop-blur-xl border border-white/10 text-white rounded-2xl flex items-center justify-center gap-3 shadow-2xl hover:scale-105 transition-all duration-300 active:scale-95 group/btn">
+                                <div className="w-10 h-10 bg-amber-500/10 rounded-xl flex items-center justify-center scale-90 group-hover/btn:scale-100 transition-transform">
+                                    <Icons.ZapSmall />
+                                </div>
+                                <span className="font-black uppercase tracking-[0.2em] text-[10px] text-amber-500">{safeGet(t, 'cta.trial', 'Deneme Talebi')}</span>
+                            </a>
+                        </div>
+
+                        <style>{`
+              body { background-color: #02040A; overflow-x: hidden; }
+              html { scroll-behavior: smooth; }
+              @keyframes bounce { 0%, 100% { transform: translate(-50%, -25%); animation-timing-function: cubic-bezier(0.8,0,1,1); } 50% { transform: translate(-50%, 0); animation-timing-function: cubic-bezier(0,0,0.2,1); } }
+              .animate-bounce { animation: bounce 2s infinite; }
+            `}</style>
+                    </div>
+                </ErrorBoundary>
+            );
+        };
+
+        const container = document.getElementById('root');
+        const root = createRoot(container);
+        root.render(<App />);
+    </script>
+</body>
+
+</html>
