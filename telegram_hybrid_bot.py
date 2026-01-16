@@ -2148,17 +2148,42 @@ def main():
     telegram_token = get_env("TELEGRAM_TOKEN")
     groq_key = get_env("GROQ_API_KEY")
     
-    # Railway otomatik olarak PUBLIC_URL veya RAILWAY_PUBLIC_DOMAIN sağlar
+    # Railway domain detection - try multiple sources
+    # Priority: RAILWAY_PUBLIC_DOMAIN > RAILWAY_STATIC_URL > auto-generate
     webhook_host = get_env("RAILWAY_PUBLIC_DOMAIN", "")
+    
+    if not webhook_host:
+        # Try RAILWAY_STATIC_URL (format: https://xxx.railway.app)
+        static_url = get_env("RAILWAY_STATIC_URL", "")
+        if static_url:
+            webhook_host = static_url.replace("https://", "").replace("http://", "").rstrip("/")
+            logger.info(f"[INIT] Using RAILWAY_STATIC_URL: {webhook_host}")
+    
+    if not webhook_host:
+        # Try to construct from Railway project info
+        railway_project = get_env("RAILWAY_PROJECT_ID", "")
+        railway_service = get_env("RAILWAY_SERVICE_ID", "")
+        if railway_project and railway_service:
+            # Railway'in varsayılan domain formatı
+            webhook_host = f"{railway_service[:8]}-production.up.railway.app"
+            logger.info(f"[INIT] Auto-constructed Railway URL: {webhook_host}")
+    
     port = int(get_env("PORT", "8080"))
 
     if not telegram_token or not groq_key:
         logger.error("TELEGRAM_TOKEN or GROQ_API_KEY not set!")
         sys.exit(1)
     
-    if not webhook_host:
-        logger.warning("RAILWAY_PUBLIC_DOMAIN not set - webhook mode requires public URL!")
-        logger.warning("Falling back to polling mode (not recommended for production)")
+    # Railway'deyiz ama domain bulunamadı - kritik uyarı
+    is_railway = get_env("RAILWAY_ENVIRONMENT", "") or get_env("RAILWAY_PROJECT_ID", "")
+    if is_railway and not webhook_host:
+        logger.warning("=" * 60)
+        logger.warning("⚠️  RAILWAY DETECTED BUT NO PUBLIC DOMAIN FOUND!")
+        logger.warning("⚠️  Please set RAILWAY_PUBLIC_DOMAIN in Railway variables")
+        logger.warning("⚠️  Or enable 'Generate Domain' in Railway Service Settings")
+        logger.warning("=" * 60)
+        # Polling moduna düş ama Flask sunucusunu çalıştır (health check için)
+        logger.warning("Falling back to polling mode with Flask health server")
 
     storage = RailwayStorage(get_env("RAILWAY_VOLUME_URL", "/data/storage"))
 
@@ -2198,14 +2223,29 @@ def main():
         ]
         await application.bot.set_my_commands(commands)
         
+        # ====== CRITICAL: AGGRESSIVE WEBHOOK CLEANUP ======
+        # Rolling deployment sırasında 409 Conflict önlemek için
+        # Önce mevcut webhook'u sil, sonra yenisini ayarla
+        try:
+            logger.info("[WEBHOOK] Step 1: Clearing any existing webhook...")
+            await application.bot.delete_webhook(drop_pending_updates=True)
+            await asyncio.sleep(1)  # Railway rolling update için bekle
+            logger.info("[WEBHOOK] Step 2: Existing webhook cleared")
+        except Exception as e:
+            logger.warning(f"[WEBHOOK] Cleanup warning (safe to ignore): {e}")
+        
         # Webhook'u ayarla veya temizle
         if webhook_host:
             webhook_url = f"https://{webhook_host}/telegram-webhook"
-            await application.bot.set_webhook(url=webhook_url, allowed_updates=Update.ALL_TYPES)
-            logger.info(f"[WEBHOOK] Set webhook to: {webhook_url}")
+            logger.info(f"[WEBHOOK] Step 3: Setting new webhook to: {webhook_url}")
+            await application.bot.set_webhook(
+                url=webhook_url, 
+                allowed_updates=Update.ALL_TYPES,
+                drop_pending_updates=True  # Bekleyen tüm güncellemeleri temizle
+            )
+            logger.info(f"[WEBHOOK] ✓ Webhook active: {webhook_url}")
         else:
-            await application.bot.delete_webhook(drop_pending_updates=True)
-            logger.info("[POLLING] Webhook cleared, using polling mode")
+            logger.info("[POLLING] No webhook host - using polling mode")
         
         logger.info("[UX] Bot commands registered in Menu button")
 
