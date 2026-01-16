@@ -38,6 +38,14 @@ from groq import Groq
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 
+# Background Jobs için
+from apscheduler.schedulers.background import BackgroundScheduler
+from apscheduler.triggers.interval import IntervalTrigger
+from apscheduler.triggers.cron import CronTrigger
+
+# Global scheduler instance
+scheduler = None
+
 # Logging
 logging.basicConfig(
     format='%(asctime)s | %(levelname)-8s | %(message)s',
@@ -932,14 +940,50 @@ def parse_routine_frequency(freq_str: str) -> tuple:
 sync_app = Flask(__name__)
 CORS(sync_app)
 
+# ==================== KEEP-ALIVE SYSTEM ====================
+KEEP_ALIVE_INTERVAL = 240  # 4 dakikada bir self-ping (Railway 5dk timeout)
+last_activity_time = time.time()
+
+def update_activity():
+    """Her aktivitede zaman damgasını güncelle"""
+    global last_activity_time
+    last_activity_time = time.time()
+
+def keep_alive_ping():
+    """Self-ping ile bot'u aktif tut"""
+    global last_activity_time
+    try:
+        webhook_host = get_env("RAILWAY_PUBLIC_DOMAIN", "")
+        port = int(get_env("PORT", "8080"))
+        
+        if webhook_host:
+            url = f"https://{webhook_host}/health"
+        else:
+            url = f"http://localhost:{port}/health"
+        
+        response = requests.get(url, timeout=10)
+        if response.status_code == 200:
+            logger.info(f"[KEEP-ALIVE] Self-ping OK - uptime: {int(time.time() - last_activity_time)}s idle")
+        else:
+            logger.warning(f"[KEEP-ALIVE] Self-ping returned {response.status_code}")
+    except Exception as e:
+        logger.error(f"[KEEP-ALIVE] Self-ping failed: {e}")
+    
+    update_activity()
+
 
 @sync_app.route("/health", methods=["GET"])
 def health():
+    update_activity()
+    uptime = int(time.time() - last_activity_time)
     return jsonify({
         "status": "ok", 
-        "service": "railway-bot", 
+        "service": "railway-bot",
+        "mode": "webhook" if get_env("RAILWAY_PUBLIC_DOMAIN") else "polling",
         "timestamp": get_now_utc().isoformat(),
-        "storage": "connected" if storage else "disconnected"
+        "storage": "connected" if storage else "disconnected",
+        "idle_seconds": uptime,
+        "scheduler": "running" if 'scheduler' in globals() and scheduler.running else "not_started"
     })
 
 def check_sync_auth():
@@ -2099,7 +2143,7 @@ async def daily_digest_job(app: Application):
 
 # ==================== MAIN ====================
 def main():
-    global storage
+    global storage, scheduler
 
     telegram_token = get_env("TELEGRAM_TOKEN")
     groq_key = get_env("GROQ_API_KEY")
@@ -2200,48 +2244,107 @@ def main():
     logger.info("=" * 50)
 
     if webhook_host:
-        # ==================== WEBHOOK MODE ====================
-        # Telegram webhook + Flask sync API birleşik sunucu
+        # ==================== WEBHOOK MODE (FIXED) ====================
+        # APScheduler ile background jobs + Flask + Telegram webhook
         
+        scheduler = BackgroundScheduler(timezone="UTC")
+        
+        # Shared event loop for async operations
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        
+        # Async helper for sync context
+        def run_async(coro):
+            """Run async coroutine from sync context"""
+            return loop.run_until_complete(coro)
+        
+        # Initialize Telegram app
+        logger.info("[INIT] Initializing Telegram Application...")
+        run_async(app.initialize())
+        run_async(app.start())
+        if app.post_init:
+            run_async(app.post_init(app))
+        logger.info("[INIT] Telegram Application ready")
+        
+        # ===== BACKGROUND JOBS (APScheduler) =====
+        def scheduler_check_reminders():
+            """APScheduler job for reminders"""
+            try:
+                run_async(check_reminders_job(app))
+            except Exception as e:
+                logger.error(f"[SCHEDULER] Reminder check failed: {e}")
+        
+        def scheduler_check_routines():
+            """APScheduler job for routines"""
+            try:
+                run_async(check_routines_job(app))
+            except Exception as e:
+                logger.error(f"[SCHEDULER] Routine check failed: {e}")
+        
+        def scheduler_daily_digest():
+            """APScheduler job for daily digest"""
+            try:
+                run_async(daily_digest_job(app))
+            except Exception as e:
+                logger.error(f"[SCHEDULER] Daily digest failed: {e}")
+        
+        # Add jobs to scheduler
+        scheduler.add_job(scheduler_check_reminders, IntervalTrigger(seconds=60), id='reminders', replace_existing=True)
+        scheduler.add_job(scheduler_check_routines, IntervalTrigger(seconds=60), id='routines', replace_existing=True)
+        scheduler.add_job(scheduler_daily_digest, CronTrigger(hour=5, minute=30), id='digest', replace_existing=True)
+        scheduler.add_job(keep_alive_ping, IntervalTrigger(seconds=KEEP_ALIVE_INTERVAL), id='keepalive', replace_existing=True)
+        
+        scheduler.start()
+        logger.info("[SCHEDULER] APScheduler started with 4 jobs")
+        
+        # ===== WEBHOOK ENDPOINT =====
         @sync_app.route("/telegram-webhook", methods=["POST"])
         def telegram_webhook():
             """Telegram'dan gelen güncellemeleri işle"""
             try:
+                update_activity()
                 update = Update.de_json(request.get_json(force=True), app.bot)
-                asyncio.run(app.process_update(update))
+                run_async(app.process_update(update))
                 return "OK", 200
             except Exception as e:
                 logger.error(f"Webhook error: {e}")
+                import traceback
+                logger.error(traceback.format_exc())
                 return "Error", 500
         
-        @sync_app.route("/health", methods=["GET"])
-        def health():
-            """Railway health check endpoint"""
-            return jsonify({"status": "healthy", "mode": "webhook", "bot": "MallibuSupportbot"}), 200
+        # ===== STARTUP INFO =====
+        logger.info(f"[SERVER] Starting Flask server on port {port}")
+        logger.info(f"[WEBHOOK] Endpoint: https://{webhook_host}/telegram-webhook")
+        logger.info(f"[HEALTH] Endpoint: https://{webhook_host}/health")
+        logger.info(f"[KEEP-ALIVE] Self-ping every {KEEP_ALIVE_INTERVAL}s")
         
-        # Flask sunucusunu başlat (webhook + sync API)
-        logger.info(f"[SERVER] Starting unified Flask server on port {port}")
+        # Graceful shutdown
+        import atexit
+        def shutdown():
+            logger.info("[SHUTDOWN] Shutting down...")
+            scheduler.shutdown(wait=False)
+            run_async(app.stop())
+            run_async(app.shutdown())
+        atexit.register(shutdown)
         
-        # Async initialization gerekiyor
-        async def async_init():
-            await app.initialize()
-            await app.start()
-            if app.post_init:
-                await app.post_init(app)
-        
-        asyncio.run(async_init())
-        
-        # Flask sync API + Telegram webhook aynı sunucuda
+        # Flask sync API + Telegram webhook
         sync_app.run(host="0.0.0.0", port=port, use_reloader=False, threaded=True)
         
     else:
         # ==================== POLLING MODE (FALLBACK) ====================
+        scheduler = BackgroundScheduler(timezone="UTC")
+        
+        # Keep-alive for polling mode too
+        scheduler.add_job(keep_alive_ping, IntervalTrigger(seconds=KEEP_ALIVE_INTERVAL), id='keepalive', replace_existing=True)
+        scheduler.start()
+        logger.info("[SCHEDULER] Keep-alive scheduler started")
+        
         # Flask thread
         flask_thread = threading.Thread(target=run_flask, daemon=True)
         flask_thread.start()
         logger.info("Sync API thread started")
         
-        # Polling başlat
+        # Polling başlat (job_queue polling modda çalışır)
         app.run_polling(allowed_updates=Update.ALL_TYPES, drop_pending_updates=True)
 
 
