@@ -1,27 +1,9 @@
-# Telegram Bot (with job-queue)
 python-telegram-bot[job-queue]==20.7
-
-# APScheduler for job queue
-apscheduler==3.10.4
-
-# Groq API
-groq==0.4.1
-
-# HTTP requests
-requests==2.31.0
-
-# Async support
-aiohttp==3.9.1
-
-# Flask API (Sync Bridge)
 flask==3.0.0
 flask-cors==4.0.0
-
-# Date parsing for reminders
-python-dateutil==2.8.2
+groq==0.4.2
+requests==2.31.0
+python-dotenv==1.0.0
 pytz==2023.3.post1
-
-# Google Calendar API
-google-auth-oauthlib
-google-api-python-client
-google-auth-httplib2
+httpx==0.26.0
+# Force rebuild: 2026-01-16T14:15:00

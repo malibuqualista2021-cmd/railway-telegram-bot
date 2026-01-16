@@ -270,9 +270,10 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ==================== MAIN ====================
 def main():
     global telegram_app
+    import threading
     
     logger.info("=" * 50)
-    logger.info("🚀 MallibuSupportbot v3.0 Starting...")
+    logger.info("🚀 MallibuSupportbot v3.1.2-FINAL-BUILD-FORCE-1 Starting...")
     logger.info("=" * 50)
     
     # Build Telegram application
@@ -289,15 +290,10 @@ def main():
         logger.info(f"📡 Running in WEBHOOK mode")
         webhook_url = f"https://{WEBHOOK_DOMAIN}/telegram-webhook"
         
-        # Initialize app synchronously
-        import asyncio
-        
         async def setup_webhook():
             await telegram_app.initialize()
             await telegram_app.start()
-            # Clear any existing webhook first
             await telegram_app.bot.delete_webhook(drop_pending_updates=True)
-            # Set new webhook
             await telegram_app.bot.set_webhook(
                 url=webhook_url,
                 allowed_updates=Update.ALL_TYPES,
@@ -311,22 +307,65 @@ def main():
         flask_app.run(host="0.0.0.0", port=PORT, use_reloader=False, threaded=True)
         
     else:
-        # ==================== POLLING MODE ====================
-        logger.info("📡 Running in POLLING mode (no webhook domain)")
-        logger.warning("⚠️  Add RAILWAY_PUBLIC_DOMAIN for webhook mode")
+        # ==================== POLLING MODE (FIXED ARCHITECTURE) ====================
+        # Flask is MAIN process (for health checks)
+        # Telegram polling runs in BACKGROUND thread
+        logger.info("📡 Running in POLLING mode")
+        logger.info(f"✓ Starting health server on port {PORT}")
         
-        # Start Flask in background thread for health checks
-        import threading
+        # Initialize Telegram app
+        async def init_telegram():
+            await telegram_app.initialize()
+            # Clear webhook to use polling
+            await telegram_app.bot.delete_webhook(drop_pending_updates=True)
+            await telegram_app.start()
+            logger.info("✓ Telegram app initialized")
         
-        def run_flask():
-            flask_app.run(host="0.0.0.0", port=PORT, use_reloader=False, threaded=True)
+        asyncio.run(init_telegram())
         
-        flask_thread = threading.Thread(target=run_flask, daemon=True)
-        flask_thread.start()
-        logger.info(f"✓ Flask health server started on port {PORT}")
+        # Run Telegram polling in background thread
+        def run_telegram_polling():
+            """Background thread for Telegram polling"""
+            logger.info("📡 Starting Telegram polling thread...")
+            try:
+                # Create new event loop for this thread
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+                
+                # Polling loop
+                while True:
+                    try:
+                        updates = loop.run_until_complete(
+                            telegram_app.bot.get_updates(
+                                timeout=30,
+                                allowed_updates=Update.ALL_TYPES
+                            )
+                        )
+                        for update in updates:
+                            loop.run_until_complete(telegram_app.process_update(update))
+                            # Acknowledge the update
+                            loop.run_until_complete(
+                                telegram_app.bot.get_updates(
+                                    offset=update.update_id + 1,
+                                    timeout=0
+                                )
+                            )
+                    except Exception as e:
+                        logger.error(f"Polling error: {e}")
+                        import time
+                        time.sleep(5)
+            except Exception as e:
+                logger.error(f"Polling thread crashed: {e}")
         
-        # Run polling
-        telegram_app.run_polling(allowed_updates=Update.ALL_TYPES, drop_pending_updates=True)
+        # Start polling thread
+        polling_thread = threading.Thread(target=run_telegram_polling, daemon=True)
+        polling_thread.start()
+        logger.info("✓ Telegram polling thread started")
+        
+        # Flask as MAIN process (blocking)
+        logger.info(f"🌐 Flask server ready on port {PORT}")
+        flask_app.run(host="0.0.0.0", port=PORT, use_reloader=False, threaded=True)
 
 if __name__ == "__main__":
     main()
+
