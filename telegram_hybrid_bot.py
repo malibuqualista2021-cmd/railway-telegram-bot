@@ -2145,8 +2145,9 @@ async def daily_digest_job(app: Application):
 def main():
     global storage, scheduler
 
-    telegram_token = get_env("TELEGRAM_TOKEN")
-    groq_key = get_env("GROQ_API_KEY")
+    # Support multiple env var names for compatibility
+    telegram_token = get_env("TELEGRAM_TOKEN") or get_env("MBOT_TKN") or get_env("BOT_TOKEN")
+    groq_key = get_env("GROQ_API_KEY") or get_env("GROQ_KEY")
     
     # Railway domain detection - try multiple sources
     # Priority: RAILWAY_PUBLIC_DOMAIN > RAILWAY_STATIC_URL > auto-generate
@@ -2171,7 +2172,9 @@ def main():
     port = int(get_env("PORT", "8080"))
 
     if not telegram_token or not groq_key:
-        logger.error("TELEGRAM_TOKEN or GROQ_API_KEY not set!")
+        logger.error("Bot token or Groq key not set!")
+        logger.error("Checked: TELEGRAM_TOKEN, MBOT_TKN, BOT_TOKEN for token")
+        logger.error("Checked: GROQ_API_KEY, GROQ_KEY for Groq")
         sys.exit(1)
     
     # Railway'deyiz ama domain bulunamadı - kritik uyarı
