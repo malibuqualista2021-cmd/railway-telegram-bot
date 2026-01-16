@@ -25,4 +25,4 @@ COPY . .
 RUN mkdir -p /data/storage
 
 # Telegram bot'u başlat
-CMD ["python", "-u", "telegram_hybrid_bot.py"]
+CMD ["python", "-u", "telegram_bot_v3.py"]
