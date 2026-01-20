@@ -394,6 +394,33 @@ async def admin_callback(update: Update, context):
             )
         except:
             pass
+    
+    elif action == "manualreject":
+        # Manuel red (eski kayıtlar için)
+        # data format: manualreject_USER_ID_REASON_KEY
+        user_id = data_parts[1]
+        reason_key = data_parts[2]
+        reason_text = REJECTION_REASONS.get(reason_key, "Belirtilmedi")
+        
+        await query.message.edit_text(
+            f"❌ *Manuel Red Gönderildi*\n\n"
+            f"🆔 User ID: `{user_id}`\n"
+            f"📋 Sebep: *{reason_text}*",
+            parse_mode="Markdown"
+        )
+        
+        # Kullanıcıya bildirim gönder
+        try:
+            await context.bot.send_message(
+                chat_id=int(user_id),
+                text=f"❌ *Talebiniz Reddedildi*\n\n"
+                     f"Sebep: {reason_text}\n\n"
+                     f"Sorularınız için destek ile iletişime geçebilirsiniz.",
+                parse_mode="Markdown"
+            )
+        except Exception as e:
+            await query.message.reply_text(f"⚠️ Kullanıcıya gönderilemedi: {e}")
+
 
 async def cmd_cancel(update: Update, context):
     """İptal komutu"""
@@ -591,6 +618,41 @@ async def admin_direct_reply(update: Update, context):
                 await update.message.reply_text(f"❌ Hata: {e}")
             return
 
+async def cmd_reject_manual(update: Update, context):
+    """EKLİ KAYITLAR için manuel red (sebep ile)"""
+    if str(update.effective_user.id) != str(ADMIN_ID):
+        return
+    
+    # Kullanım: /reject [user_id]
+    if not context.args:
+        await update.message.reply_text(
+            "📝 *Manuel Red Komutu*\n\n"
+            "Kullanım: `/reject [user_id]`\n\n"
+            "Örnek: `/reject 123456789`\n\n"
+            "Sebep seçim menüsü açılacaktır.",
+            parse_mode="Markdown"
+        )
+        return
+    
+    user_id = context.args[0]
+    
+    # Red sebeplerini buton olarak göster
+    keyboard = []
+    for reason_key, reason_text in REJECTION_REASONS.items():
+        keyboard.append([InlineKeyboardButton(
+            reason_text, 
+            callback_data=f"manualreject_{user_id}_{reason_key}"
+        )])
+    
+    await update.message.reply_text(
+        f"❌ *Red Sebebi Seçin*\n\n"
+        f"🆔 User ID: `{user_id}`\n\n"
+        f"Bir sebep seçin:",
+        reply_markup=InlineKeyboardMarkup(keyboard),
+        parse_mode="Markdown"
+    )
+
+
 async def cmd_help(update: Update, context):
     """Yardım"""
     text = (
@@ -675,11 +737,12 @@ async def run_bot():
     application.add_handler(CommandHandler("pending", cmd_pending))
     application.add_handler(CommandHandler("status", cmd_status))
     application.add_handler(CommandHandler("reply", cmd_reply))
+    application.add_handler(CommandHandler("reject", cmd_reject_manual))
     application.add_handler(CommandHandler("notify_expired", cmd_notify_expired))
     application.add_handler(CommandHandler("scan", cmd_scan))
     application.add_handler(CommandHandler("sync", cmd_sync))
     application.add_handler(CommandHandler("repair_sheets", cmd_repair_sheets))
-    application.add_handler(CallbackQueryHandler(admin_callback, pattern="^(approve_|reject|rejectreason)"))
+    application.add_handler(CallbackQueryHandler(admin_callback, pattern="^(approve_|reject|rejectreason|manualreject)"))
     
     # Kullanıcı mesajlarını yakala (ConversationHandler dışında)
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_user_message))
