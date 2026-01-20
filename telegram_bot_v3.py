@@ -470,7 +470,7 @@ async def cmd_notify_expired(update: Update, context):
         return
     
     sent = 0
-    expired_count = len(expired_users)
+   expired_count = len(expired_users)
     for user in expired_users:
         try:
             raw_id = user.get('telegram_id', '')
@@ -595,29 +595,6 @@ async def cmd_reply(update: Update, context):
     except Exception as e:
         await update.message.reply_text(f"❌ Mesaj gönderilemedi: {e}")
 
-async def admin_direct_reply(update: Update, context):
-    """Admin reply modundayken mesaj gönderme"""
-    if str(update.effective_user.id) != str(ADMIN_ID):
-        return
-    
-    # Admin'in reply modunda olup olmadığını kontrol et
-    if 'reply_mode' in context.user_data and context.user_data['reply_mode']:
-        target_user = context.user_data.get('reply_target')
-        if target_user:
-            try:
-                await context.bot.send_message(
-                    chat_id=int(target_user['user_id']),
-                    text=f"📩 *Admin'den Mesaj:*\n\n{update.message.text}",
-                    parse_mode="Markdown"
-                )
-                await update.message.reply_text(
-                    f"✅ Gönderildi: {target_user['user_name']}\n\n"
-                    f"Çıkmak için /done yazın."
-                )
-            except Exception as e:
-                await update.message.reply_text(f"❌ Hata: {e}")
-            return
-
 async def cmd_reject_manual(update: Update, context):
     """EKLİ KAYITLAR için manuel red (sebep ile)"""
     if str(update.effective_user.id) != str(ADMIN_ID):
@@ -666,7 +643,8 @@ async def cmd_help(update: Update, context):
             "\n*Admin Komutları:*\n"
             "/pending - Bekleyen talepler\n"
             "/status - Bot durumu\n"
-            "/reply \[mesaj\] - Kullanıcıya yanıt\n"
+            "/reply \\[mesaj\\] - Kullanıcıya yanıt\n"
+            "/reject \\[user\\_id\\] - Manuel red (sebepli)\n"
             "/notify\\_expired - Süresi dolanlara bildirim\n"
             "/scan - Tarama yap\n"
             "/sync - Verileri senkronize et\n"
