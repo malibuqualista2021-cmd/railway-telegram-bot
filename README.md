@@ -1,3 +1,4 @@
+# Railway Telegram Bot - Updated 2026-01-21
 # Railway Cloud Bot - Telegram Asistan
 
 ## Özellikler
