@@ -732,7 +732,7 @@ async def run_bot():
     """Bot'u başlat"""
     log.info("Bot başlatılıyor...")
     
-    application = Application.builder().token(BOT_TOKEN).build()
+    application = Application.builder().token(BOT_TOKEN).updater(None).build()
     
     # Conversation handler - per_message=False uyarısını engellemek için explicit ayar
     conv_handler = ConversationHandler(
