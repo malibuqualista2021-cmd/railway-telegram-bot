@@ -1,371 +1,887 @@
 #!/usr/bin/env python3
 """
-MallibuSupportbot v3.0 - Minimal & Reliable
-Designed specifically for Railway deployment.
-All unnecessary complexity removed.
+🌴 Malibu Telegram Bot v1.0
+===========================
+- Website deep link desteği
+- Conversation flow ile bilgi toplama
+- Google Sheets webhook entegrasyonu
+- Admin onay/red sistemi
+- Süresi dolanlara bildirim
 """
 import os
 import sys
-import json
-import logging
 import asyncio
-from datetime import datetime
+import logging
+import json
+import signal
+import threading
+import time
+from datetime import datetime, timedelta, timezone
 
-import requests
-from flask import Flask, request, jsonify
-from flask_cors import CORS
+os.environ['PYTHONUNBUFFERED'] = '1'
+
+import httpx
+from flask import Flask, jsonify
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import Application, CommandHandler, MessageHandler, CallbackQueryHandler, filters, ContextTypes
-from groq import Groq
+from telegram.ext import (
+    Application, CommandHandler, MessageHandler, 
+    CallbackQueryHandler, ConversationHandler, filters
+)
+from telegram.error import TelegramError, TimedOut, RetryAfter, Conflict, NetworkError
 
 # ==================== LOGGING ====================
 logging.basicConfig(
-    format='%(asctime)s | %(levelname)-8s | %(message)s',
+    format='%(asctime)s | %(levelname)s | %(message)s',
     level=logging.INFO,
-    handlers=[logging.StreamHandler(sys.stdout)]
+    stream=sys.stdout
 )
-logger = logging.getLogger(__name__)
+log = logging.getLogger("MalibuBot")
+logging.getLogger("httpx").setLevel(logging.ERROR)
+logging.getLogger("telegram").setLevel(logging.WARNING)
 
-# ==================== CONFIGURATION ====================
-def get_env(key: str, default: str = "") -> str:
-    """Get environment variable with fallbacks"""
-    return os.getenv(key, default)
+# ==================== CONFIG ====================
+BOT_TOKEN = os.getenv("BOT_TOKEN", "")
+ADMIN_ID = os.getenv("ADMIN_ID", "")
+SHEETS_WEBHOOK = os.getenv("SHEETS_WEBHOOK", "")
+WEBSITE_URL = os.getenv("WEBSITE_URL", "https://harmonikprzmalibu.netlify.app")
+PORT = int(os.getenv("PORT", "8080"))
+RAILWAY_URL = os.getenv("RAILWAY_PUBLIC_DOMAIN", "")
 
-# Support multiple env var names for compatibility
-TELEGRAM_TOKEN = get_env("TELEGRAM_TOKEN") or get_env("MBOT_TKN") or get_env("BOT_TOKEN")
-GROQ_API_KEY = get_env("GROQ_API_KEY") or get_env("GROQ_KEY")
-ADMIN_CHAT_ID = get_env("ADMIN_CHAT_ID") or get_env("MCHAT_ID")
-WEBHOOK_DOMAIN = get_env("RAILWAY_PUBLIC_DOMAIN") or get_env("RAILWAY_STATIC_URL", "").replace("https://", "").replace("http://", "").rstrip("/")
-PORT = int(get_env("PORT", "8080"))
+# Ödeme adresi
+PAYMENT_ADDRESS = "TKUvYuzdZvkq6ksgPxfDRsUQE4vYjnEcnL"
 
-# Validate required config
-if not TELEGRAM_TOKEN:
-    logger.error("❌ TELEGRAM_TOKEN or MBOT_TKN not set!")
-    sys.exit(1)
+# Conversation states
+TRADINGVIEW, TXID = range(2)
 
-if not GROQ_API_KEY:
-    logger.warning("⚠️  GROQ_API_KEY not set - AI features disabled")
+# Plan bilgileri
+PLANS = {
+    "plan_monthly_30": {"name": "Aylık", "price": "$30", "days": 30},
+    "plan_quarterly_79": {"name": "3 Aylık", "price": "$79", "days": 90},
+    "plan_yearly_269": {"name": "Yıllık", "price": "$269", "days": 365},
+    "trial": {"name": "7 Günlük Deneme", "price": "Ücretsiz", "days": 7}
+}
 
-logger.info(f"✓ Token loaded: {TELEGRAM_TOKEN[:10]}...")
-logger.info(f"✓ Webhook domain: {WEBHOOK_DOMAIN or 'NOT SET'}")
-logger.info(f"✓ Port: {PORT}")
+# Red sebepleri (Gelişmiş)
+REJECTION_REASONS = {
+    "duplicate": "🔄 Mükerrer Deneme Kaydı",
+    "invalid_txid": "💳 Geçersiz TXID / Ödeme",
+    "pending": "⏳ Ödeme Beklemede / Onaylanmadı",
+    "invalid_user": "👤 Geçersiz TradingView Adı",
+    "other": "❓ Diğer Sebep"
+}
 
-# ==================== FLASK APP ====================
-flask_app = Flask(__name__)
-CORS(flask_app)
+# ==================== STATE ====================
+START_TIME = datetime.now(timezone.utc)
+BOT_STATUS = {"running": False, "errors": 0, "restarts": 0}
+pending_requests = {}
+last_user_message = {}  # {admin_id: {user_id: str, user_name: str}}
+SHUTDOWN = threading.Event()
 
-# Global Telegram app reference
-telegram_app = None
 
-@flask_app.route("/health", methods=["GET"])
+
+# ==================== FLASK ====================
+app = Flask(__name__)
+
+@app.route("/")
+@app.route("/health")
 def health():
-    """Health check endpoint for Railway"""
+    uptime = int((datetime.now(timezone.utc) - START_TIME).total_seconds())
     return jsonify({
         "status": "ok",
-        "bot": "MallibuSupportbot",
-        "version": "3.0",
-        "timestamp": datetime.utcnow().isoformat()
+        "version": "1.0",
+        "uptime": uptime,
+        "bot": BOT_STATUS
     }), 200
 
-@flask_app.route("/", methods=["GET"])
-def root():
-    """Root endpoint"""
-    return jsonify({"message": "MallibuSupportbot is running!"}), 200
+@app.route("/ping")
+def ping():
+    return "pong", 200
 
-@flask_app.route("/telegram-webhook", methods=["POST"])
-def telegram_webhook():
-    """Handle Telegram webhook updates"""
-    global telegram_app
-    try:
-        if telegram_app is None:
-            logger.error("Telegram app not initialized!")
-            return "Not ready", 503
-        
-        data = request.get_json(force=True)
-        update = Update.de_json(data, telegram_app.bot)
-        
-        # Run async update processing
-        asyncio.run(telegram_app.process_update(update))
-        
-        return "OK", 200
-    except Exception as e:
-        logger.error(f"Webhook error: {e}")
-        import traceback
-        logger.error(traceback.format_exc())
-        return "Error", 500
-
-# ==================== AI HELPER ====================
-def get_ai_response(user_message: str) -> str:
-    """Get AI response from Groq"""
-    if not GROQ_API_KEY:
-        return "AI devre dışı. Groq API key ayarlanmamış."
+# ==================== GOOGLE SHEETS ====================
+async def save_to_sheets(data: dict) -> bool:
+    """Google Sheets'e webhook ile kaydet"""
+    if not SHEETS_WEBHOOK:
+        log.warning("SHEETS_WEBHOOK not configured")
+        return False
     
     try:
-        client = Groq(api_key=GROQ_API_KEY)
-        response = client.chat.completions.create(
-            model="llama-3.3-70b-versatile",
-            messages=[
-                {"role": "system", "content": "Sen Malibu TradingView indikatörlerinin destek asistanısın. Türkçe yanıt ver. Kısa ve öz ol."},
-                {"role": "user", "content": user_message}
-            ],
-            max_tokens=500,
-            temperature=0.7
-        )
-        return response.choices[0].message.content
+        async with httpx.AsyncClient(timeout=30.0, follow_redirects=True) as client:
+            response = await client.post(SHEETS_WEBHOOK, json=data)
+            if response.status_code == 200:
+                log.info(f"✅ Sheets'e kaydedildi: {data.get('tradingview', '?')}")
+                return True
+            else:
+                log.error(f"Sheets error: {response.status_code}")
     except Exception as e:
-        logger.error(f"AI error: {e}")
-        return f"AI yanıtı alınamadı. Lütfen daha sonra tekrar deneyin."
+        log.error(f"Sheets webhook error: {e}")
+    return False
+
+async def get_expired_users() -> list:
+    """Süresi dolan kullanıcıları al"""
+    if not SHEETS_WEBHOOK:
+        return []
+    
+    try:
+        async with httpx.AsyncClient(timeout=30.0, follow_redirects=True) as client:
+            response = await client.get(f"{SHEETS_WEBHOOK}?action=expired")
+            if response.status_code == 200:
+                return response.json()
+    except Exception as e:
+        log.error(f"Get expired error: {e}")
+    return []
+
+# ==================== HELPERS ====================
+def calculate_end_date(days: int) -> str:
+    end = datetime.now(timezone.utc) + timedelta(days=days)
+    return end.strftime("%d.%m.%Y")
 
 # ==================== BOT HANDLERS ====================
-async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle /start command"""
+async def cmd_start(update: Update, context):
+    """Start komutu - website'den deep link ile gelir"""
     user = update.effective_user
-    logger.info(f"/start from {user.id} ({user.first_name})")
+    args = context.args if context.args else []
     
-    # Check for deep link parameters (from website buttons)
-    if context.args:
-        plan = context.args[0]
-        logger.info(f"Deep link: {plan}")
+    log.info(f"START: {user.id} - args: {args}")
+    
+    # Deep link'ten plan al
+    plan_key = args[0] if args else None
+    
+    if plan_key and plan_key in PLANS:
+        plan = PLANS[plan_key]
+        context.user_data['plan_key'] = plan_key
+        context.user_data['plan'] = plan
         
-        if plan.startswith("plan_"):
-            plan_names = {
-                "plan_monthly_30": "Aylık ($30)",
-                "plan_quarterly_79": "3 Aylık ($79)",
-                "plan_yearly_269": "Yıllık ($269)"
-            }
-            plan_name = plan_names.get(plan, plan)
-            
+        if plan_key == "trial":
+            # Deneme için sadece TradingView sor
             await update.message.reply_text(
-                f"🎉 **{plan_name}** planını seçtiniz!\n\n"
-                f"💰 Ödeme için:\n"
-                f"`TKUvYuzdZvkq6ksgPxfDRsUQE4vYjnEcnL`\n\n"
-                f"⚠️ Sadece **TRC20 USDT** gönderin.\n"
-                f"📱 Ödeme sonrası ekran görüntüsünü buraya gönderin.",
+                f"🌴 *Malibu PRZ Suite*\n\n"
+                f"✅ *{plan['name']}* seçildi!\n\n"
+                f"📝 Lütfen TradingView kullanıcı adınızı yazın:",
                 parse_mode="Markdown"
             )
-            
-            # Notify admin
-            if ADMIN_CHAT_ID:
-                try:
-                    await context.bot.send_message(
-                        chat_id=int(ADMIN_CHAT_ID),
-                        text=f"🆕 Yeni müşteri!\nUser: {user.first_name} ({user.id})\nPlan: {plan_name}"
-                    )
-                except Exception as e:
-                    logger.error(f"Admin notify error: {e}")
-            return
-    
-    # Default welcome message
-    keyboard = [
-        [InlineKeyboardButton("📊 Aylık - $30", callback_data="plan_monthly_30")],
-        [InlineKeyboardButton("💎 3 Aylık - $79", callback_data="plan_quarterly_79")],
-        [InlineKeyboardButton("🏆 Yıllık - $269", callback_data="plan_yearly_269")],
-        [InlineKeyboardButton("🆓 Deneme Talebi", callback_data="trial_request")]
-    ]
-    reply_markup = InlineKeyboardMarkup(keyboard)
-    
-    await update.message.reply_text(
-        f"Merhaba {user.first_name}! 👋\n\n"
-        f"Ben **Malibu PRZ Suite** destek botuyum.\n"
-        f"Harmonic PRZ + SMC Malibu indikatörlerine hoş geldiniz!\n\n"
-        f"🔽 Bir plan seçin veya soru sorun:",
-        reply_markup=reply_markup,
-        parse_mode="Markdown"
-    )
-
-async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle regular messages"""
-    user = update.effective_user
-    text = update.message.text
-    logger.info(f"Message from {user.id}: {text[:50]}...")
-    
-    # Get AI response
-    response = get_ai_response(text)
-    await update.message.reply_text(response)
-    
-    # Forward to admin
-    if ADMIN_CHAT_ID:
-        try:
-            await context.bot.send_message(
-                chat_id=int(ADMIN_CHAT_ID),
-                text=f"📨 {user.first_name} ({user.id}):\n{text}"
+            return TRADINGVIEW
+        else:
+            # Ücretli plan
+            await update.message.reply_text(
+                f"🌴 *Malibu PRZ Suite*\n\n"
+                f"✅ *{plan['name']} ({plan['price']})* seçildi!\n\n"
+                f"📝 Lütfen TradingView kullanıcı adınızı yazın:",
+                parse_mode="Markdown"
             )
-        except Exception as e:
-            logger.error(f"Admin forward error: {e}")
+            return TRADINGVIEW
+    else:
+        # Normal start - plan seçimi göster
+        keyboard = [
+            [InlineKeyboardButton("💳 Aylık - $30", callback_data="plan_monthly_30")],
+            [InlineKeyboardButton("⭐ 3 Aylık - $79 (En Popüler)", callback_data="plan_quarterly_79")],
+            [InlineKeyboardButton("👑 Yıllık - $269", callback_data="plan_yearly_269")],
+            [InlineKeyboardButton("🆓 7 Günlük Ücretsiz Deneme", callback_data="trial")]
+        ]
+        
+        await update.message.reply_text(
+            f"Merhaba {user.first_name}! 👋\n\n"
+            f"🌴 *Malibu PRZ Suite'e* hoş geldiniz!\n\n"
+            f"Harmonik PRZ + SMC Malibu hibrit sistemi ile\n"
+            f"kurumsal düzeyde teknik analiz yapın.\n\n"
+            f"📊 Bir plan seçin:",
+            reply_markup=InlineKeyboardMarkup(keyboard),
+            parse_mode="Markdown"
+        )
+        return ConversationHandler.END
 
-async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle button callbacks"""
+async def plan_selected(update: Update, context):
+    """Plan seçildiğinde"""
     query = update.callback_query
     await query.answer()
     
-    user = update.effective_user
-    data = query.data
-    logger.info(f"Callback from {user.id}: {data}")
+    plan_key = query.data
+    if plan_key not in PLANS:
+        return ConversationHandler.END
     
-    if data.startswith("plan_"):
-        plan_names = {
-            "plan_monthly_30": ("Aylık", "$30"),
-            "plan_quarterly_79": ("3 Aylık", "$79"),
-            "plan_yearly_269": ("Yıllık", "$269")
-        }
-        name, price = plan_names.get(data, ("Bilinmeyen", "?"))
-        
-        await query.message.reply_text(
-            f"✅ **{name} ({price})** planını seçtiniz!\n\n"
-            f"💳 Ödeme adresi (TRC20 USDT):\n"
-            f"`TKUvYuzdZvkq6ksgPxfDRsUQE4vYjnEcnL`\n\n"
-            f"📸 Ödeme sonrası ekran görüntüsünü buraya gönderin.",
-            parse_mode="Markdown"
-        )
-        
-        # Notify admin
-        if ADMIN_CHAT_ID:
-            try:
-                await context.bot.send_message(
-                    chat_id=int(ADMIN_CHAT_ID),
-                    text=f"🆕 Plan seçimi!\nUser: {user.first_name} ({user.id})\nPlan: {name} ({price})"
-                )
-            except Exception as e:
-                logger.error(f"Admin notify error: {e}")
+    plan = PLANS[plan_key]
+    context.user_data['plan_key'] = plan_key
+    context.user_data['plan'] = plan
     
-    elif data == "trial_request":
-        await query.message.reply_text(
-            "📝 **Deneme Talebi**\n\n"
-            "Lütfen TradingView kullanıcı adınızı yazın.\n"
-            "24 saat içinde 7 günlük deneme erişiminiz aktif edilecektir.",
-            parse_mode="Markdown"
-        )
-        
-        if ADMIN_CHAT_ID:
-            try:
-                await context.bot.send_message(
-                    chat_id=int(ADMIN_CHAT_ID),
-                    text=f"🆓 Deneme talebi!\nUser: {user.first_name} ({user.id})"
-                )
-            except Exception as e:
-                logger.error(f"Admin notify error: {e}")
+    await query.message.reply_text(
+        f"✅ *{plan['name']} ({plan['price']})* seçildi!\n\n"
+        f"📝 Lütfen TradingView kullanıcı adınızı yazın:",
+        parse_mode="Markdown"
+    )
+    return TRADINGVIEW
 
-async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle photo messages (payment screenshots)"""
+async def receive_tradingview(update: Update, context):
+    """TradingView kullanıcı adı alındı"""
     user = update.effective_user
-    logger.info(f"Photo from {user.id}")
+    tv_username = update.message.text.strip()
+    
+    context.user_data['tradingview'] = tv_username
+    plan = context.user_data.get('plan', {})
+    plan_key = context.user_data.get('plan_key', '')
+    
+    if plan_key == "trial":
+        # Deneme - TXID gerekmez, direkt kaydet
+        await save_request(user, context, txid="DENEME")
+        
+        await update.message.reply_text(
+            f"✅ *Deneme talebiniz alındı!*\n\n"
+            f"📺 TradingView: `{tv_username}`\n"
+            f"⏱️ Süre: 7 gün\n\n"
+            f"24 saat içinde erişiminiz aktifleştirilecektir.\n"
+            f"Teşekkürler! 🙏",
+            parse_mode="Markdown"
+        )
+        return ConversationHandler.END
+    else:
+        # Ücretli plan - ödeme bilgisi göster
+        await update.message.reply_text(
+            f"📺 TradingView: `{tv_username}`\n\n"
+            f"💰 *Ödeme Bilgileri:*\n\n"
+            f"Adres (TRC20 USDT):\n"
+            f"`{PAYMENT_ADDRESS}`\n\n"
+            f"Tutar: *{plan.get('price', '?')}*\n\n"
+            f"⚠️ Ödeme yaptıktan sonra *TXID* (işlem numarası) gönderin:",
+            parse_mode="Markdown"
+        )
+        return TXID
+
+async def receive_txid(update: Update, context):
+    """TXID alındı - kaydı tamamla"""
+    user = update.effective_user
+    txid = update.message.text.strip()
+    
+    context.user_data['txid'] = txid
+    await save_request(user, context, txid=txid)
+    
+    plan = context.user_data.get('plan', {})
     
     await update.message.reply_text(
-        "📸 Ödeme ekran görüntüsü alındı!\n"
-        "İşleminiz en kısa sürede kontrol edilecektir.\n"
-        "Teşekkürler! 🙏"
+        f"✅ *Ödeme talebiniz alındı!*\n\n"
+        f"📋 TXID: `{txid}`\n"
+        f"📊 Plan: {plan.get('name', '?')} ({plan.get('price', '?')})\n\n"
+        f"İşleminiz 24 saat içinde kontrol edilecektir.\n"
+        f"Onaylandığında bilgilendirileceksiniz. 🙏",
+        parse_mode="Markdown"
     )
+    return ConversationHandler.END
+
+async def save_request(user, context, txid: str):
+    """Talebi kaydet ve admin'e bildir"""
+    plan = context.user_data.get('plan', {})
+    plan_key = context.user_data.get('plan_key', '')
+    tv_username = context.user_data.get('tradingview', '')
     
-    # Forward to admin
-    if ADMIN_CHAT_ID:
+    now = datetime.now(timezone.utc)
+    end_date = calculate_end_date(plan.get('days', 30))
+    
+    data = {
+        'tarih': now.strftime("%d.%m.%Y %H:%M"),
+        'telegram_id': str(user.id),
+        'telegram_username': user.username or "Yok",
+        'telegram_name': user.first_name or "",
+        'txid': txid,
+        'plan': plan.get('name', ''),
+        'tradingview': tv_username,
+        'baslangic_tarihi': now.strftime("%d.%m.%Y"),
+        'bitis_tarihi': end_date,
+        'durum': 'Beklemede 🟡'
+    }
+    
+    # Google Sheets'e kaydet
+    await save_to_sheets(data)
+    
+    # Admin'e bildir
+    if ADMIN_ID:
+        try:
+            keyboard = [[
+                InlineKeyboardButton("✅ Onayla", callback_data=f"approve_{user.id}"),
+                InlineKeyboardButton("❌ Reddet", callback_data=f"reject_{user.id}")
+            ]]
+            
+            pending_requests[str(user.id)] = data
+            
+            is_trial = "🆓 DENEME" if txid == "DENEME" else "💰 ÖDEME"
+            
+            await context.bot.send_message(
+                chat_id=int(ADMIN_ID),
+                text=f"{is_trial} *Yeni Talep*\n\n"
+                     f"👤 {user.first_name} (@{user.username or 'yok'})\n"
+                     f"🆔 `{user.id}`\n"
+                     f"📊 {plan.get('name', '?')} ({plan.get('price', '?')})\n"
+                     f"📺 TradingView: `{tv_username}`\n"
+                     f"📋 TXID: `{txid}`",
+                parse_mode="Markdown",
+                reply_markup=InlineKeyboardMarkup(keyboard)
+            )
+        except Exception as e:
+            log.error(f"Admin bildirim hatası: {e}")
+
+async def admin_callback(update: Update, context):
+    """Admin onay/red işlemleri"""
+    query = update.callback_query
+    await query.answer()
+    
+    if str(query.from_user.id) != str(ADMIN_ID):
+        return
+    
+    data_parts = query.data.split("_")
+    action = data_parts[0]
+    
+    if action == "approve":
+        user_id = data_parts[1]
+        user_data = pending_requests.pop(user_id, {})
+        
+        await query.message.edit_text(
+            f"✅ *Onaylandı*\n\n"
+            f"👤 {user_data.get('telegram_name', user_id)}\n"
+            f"📺 {user_data.get('tradingview', '?')}",
+            parse_mode="Markdown"
+        )
+        
+        # Kullanıcıya bildir
         try:
             await context.bot.send_message(
-                chat_id=int(ADMIN_CHAT_ID),
-                text=f"💰 Ödeme SS!\nUser: {user.first_name} ({user.id})"
+                chat_id=int(user_id),
+                text="🎉 *Erişiminiz aktifleştirildi!*\n\n"
+                     "TradingView'da indikatör erişiminiz açıldı.\n"
+                     "İyi işlemler! 🌴",
+                parse_mode="Markdown"
             )
-            await update.message.forward(chat_id=int(ADMIN_CHAT_ID))
+        except:
+            pass
+            
+    elif action == "reject":
+        user_id = data_parts[1]
+        user_data = pending_requests.get(user_id, {})
+        
+        # Red sebeplerini göster
+        keyboard = []
+        for reason_key, reason_text in REJECTION_REASONS.items():
+            keyboard.append([InlineKeyboardButton(
+                reason_text, 
+                callback_data=f"rejectreason_{user_id}_{reason_key}"
+            )])
+        
+        await query.message.reply_text(
+            f"❌ *Red Sebebi Seçin*\n\n"
+            f"👤 {user_data.get('telegram_name', user_id)}\n"
+            f"📺 {user_data.get('tradingview', '?')}",
+            reply_markup=InlineKeyboardMarkup(keyboard),
+            parse_mode="Markdown"
+        )
+    
+    elif action == "rejectreason":
+        # data format: rejectreason_USER_ID_REASON_KEY
+        user_id = data_parts[1]
+        reason_key = data_parts[2]
+        user_data = pending_requests.pop(user_id, {})
+        reason_text = REJECTION_REASONS.get(reason_key, "Belirtilmedi")
+        
+        await query.message.edit_text(
+            f"❌ *Reddedildi*\n\n"
+            f"👤 {user_data.get('telegram_name', user_id)}\n"
+            f"📺 {user_data.get('tradingview', '?')}\n"
+            f"📋 Sebep: *{reason_text}*",
+            parse_mode="Markdown"
+        )
+        
+        # Kullanıcıya sebepli red bildirimi
+        try:
+            await context.bot.send_message(
+                chat_id=int(user_id),
+                text=f"❌ *Talebiniz Reddedildi*\n\n"
+                     f"Sebep: {reason_text}\n\n"
+                     f"Sorularınız için destek ile iletişime geçebilirsiniz.",
+                parse_mode="Markdown"
+            )
+        except:
+            pass
+    
+    elif action == "manualreject":
+        # Manuel red (eski kayıtlar için)
+        # data format: manualreject_USER_ID_REASON_KEY
+        user_id = data_parts[1]
+        reason_key = data_parts[2]
+        reason_text = REJECTION_REASONS.get(reason_key, "Belirtilmedi")
+        
+        await query.message.edit_text(
+            f"❌ *Manuel Red Gönderildi*\n\n"
+            f"🆔 User ID: `{user_id}`\n"
+            f"📋 Sebep: *{reason_text}*",
+            parse_mode="Markdown"
+        )
+        
+        # Kullanıcıya bildirim gönder
+        try:
+            await context.bot.send_message(
+                chat_id=int(user_id),
+                text=f"❌ *Talebiniz Reddedildi*\n\n"
+                     f"Sebep: {reason_text}\n\n"
+                     f"Sorularınız için destek ile iletişime geçebilirsiniz.",
+                parse_mode="Markdown"
+            )
         except Exception as e:
-            logger.error(f"Admin forward error: {e}")
+            await query.message.reply_text(f"⚠️ Kullanıcıya gönderilemedi: {e}")
 
-# ==================== MAIN ====================
-def main():
-    global telegram_app
-    import threading
+
+async def cmd_cancel(update: Update, context):
+    """İptal komutu"""
+    await update.message.reply_text(
+        "İşlem iptal edildi.\n\nYeniden başlamak için /start yazın."
+    )
+    return ConversationHandler.END
+
+# ==================== ADMIN COMMANDS ====================
+async def cmd_pending(update: Update, context):
+    """Bekleyen talepler"""
+    if str(update.effective_user.id) != str(ADMIN_ID):
+        return
     
-    logger.info("=" * 50)
-    logger.info("🚀 MallibuSupportbot v3.1.2-FINAL-BUILD-FORCE-1 Starting...")
-    logger.info("=" * 50)
+    count = len(pending_requests)
+    await update.message.reply_text(f"⏳ Bekleyen talep: {count}")
+
+async def cmd_status(update: Update, context):
+    """Bot durumu"""
+    if str(update.effective_user.id) != str(ADMIN_ID):
+        return
     
-    # Build Telegram application
-    telegram_app = Application.builder().token(TELEGRAM_TOKEN).build()
+    uptime = int((datetime.now(timezone.utc) - START_TIME).total_seconds())
+    hours = uptime // 3600
+    minutes = (uptime % 3600) // 60
     
-    # Add handlers
-    telegram_app.add_handler(CommandHandler("start", start_command))
-    telegram_app.add_handler(MessageHandler(filters.PHOTO, handle_photo))
-    telegram_app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
-    telegram_app.add_handler(CallbackQueryHandler(handle_callback))
+    await update.message.reply_text(
+        f"📊 *Bot Durumu*\n\n"
+        f"✅ Çalışıyor\n"
+        f"⏱️ Uptime: {hours}s {minutes}dk\n"
+        f"🔄 Restart: {BOT_STATUS['restarts']}\n"
+        f"❌ Hatalar: {BOT_STATUS['errors']}",
+        parse_mode="Markdown"
+    )
+
+async def cmd_notify_expired(update: Update, context):
+    """Süresi dolanlara bildirim gönder"""
+    if str(update.effective_user.id) != str(ADMIN_ID):
+        return
     
-    if WEBHOOK_DOMAIN:
-        # ==================== WEBHOOK MODE ====================
-        logger.info(f"📡 Running in WEBHOOK mode")
-        webhook_url = f"https://{WEBHOOK_DOMAIN}/telegram-webhook"
+    await update.message.reply_text("🔄 Süresi dolanlar kontrol ediliyor...")
+    
+    expired_users = await get_expired_users()
+    
+    if not expired_users:
+        await update.message.reply_text("✅ Süresi dolan kullanıcı yok.")
+        return
+    
+    sent = 0
+    expired_count = len(expired_users)
+    for user in expired_users:
+        try:
+            raw_id = user.get('telegram_id', '')
+            user_id = str(raw_id).strip()
+            if user_id and user_id.isdigit():
+                await context.bot.send_message(
+                    chat_id=int(user_id),
+                    text=f"⚠️ Malibu PRZ Suite erişiminiz sona erdi. Yenilemek için: {WEBSITE_URL}/",
+                    parse_mode="Markdown"
+                )
+                sent += 1
+                await asyncio.sleep(0.15)
+        except Exception as e:
+            log.warning(f"Bildirim gönderilemedi {user.get('telegram_id')}: {e}")
+    
+    await update.message.reply_text(f"📨 {sent}/{expired_count} kişiye bildirim gönderildi.")
+
+async def cmd_scan(update: Update, context):
+    """Sheets'i kontrol et ve süresi dolanlara bildirim gönder - Crystal Clear Edition"""
+    if str(update.effective_user.id) != str(ADMIN_ID):
+        return
+    
+    status_msg = await update.message.reply_text("🔍 Gelişmiş tarama başlatılıyor... Lütfen bekleyin.")
+    
+    try:
+        expired_users = await get_expired_users()
         
-        async def setup_webhook():
-            await telegram_app.initialize()
-            await telegram_app.start()
-            await telegram_app.bot.delete_webhook(drop_pending_updates=True)
-            await telegram_app.bot.set_webhook(
-                url=webhook_url,
-                allowed_updates=Update.ALL_TYPES,
-                drop_pending_updates=True
+        if not expired_users:
+            await status_msg.edit_text("✅ Süresi dolan veya bildirim bekleyen kullanıcı bulunamadı.")
+            return
+            
+        if isinstance(expired_users, dict) and "error" in expired_users:
+            await status_msg.edit_text(f"❌ Sheets Hatası: {expired_users.get('error')}")
+            return
+
+        total_detected = len(expired_users)
+        sent = 0
+        no_id = 0
+        errors = 0
+        
+        for user in expired_users:
+            raw_id = str(user.get('telegram_id', '')).strip()
+            
+            # ID kontrolü (Sayısal mı?)
+            if raw_id and raw_id.isdigit():
+                try:
+                    await context.bot.send_message(
+                        chat_id=int(raw_id),
+                        text=f"⚠️ Malibu PRZ Suite erişiminiz sona erdi. Yenilemek için: {WEBSITE_URL}/",
+                        parse_mode="Markdown"
+                    )
+                    sent += 1
+                    await asyncio.sleep(0.15)
+                except Exception as e:
+                    errors += 1
+                    log.error(f"Mesaj hatası ({raw_id}): {e}")
+            else:
+                # ID "Yok" veya geçersiz olanlar
+                no_id += 1
+        
+        report = (
+            f"🚀 *Tarama Raporu*\n\n"
+            f"📅 Tarih: `{datetime.now(timezone.utc).strftime('%d.%m.%Y')}`\n"
+            f"🔍 Tespit Edilen Süresi Dolan: `{total_detected}`\n\n"
+            f"✅ Bildirim Gönderilen: `{sent}`\n"
+            f"⚠️ ID'si Eksik (Yok): `{no_id}`\n"
+            f"❌ Teknik Hata: `{errors}`\n\n"
+            f"*Not:* ID'si 'Yok' olanlara Telegram üzerinden ulaşılamaz. Yeni kayıtlarda ID otomatik kaydedilecektir."
+        )
+        await status_msg.edit_text(report, parse_mode="Markdown")
+        
+    except Exception as e:
+        log.error(f"Scan error: {e}")
+        await status_msg.edit_text(f"❌ Tarama sırasında teknik hata oluştu: {e}")
+
+async def cmd_sync(update: Update, context):
+    """Sheets senkronizasyonu - Kayıtları tazele"""
+    if str(update.effective_user.id) != str(ADMIN_ID):
+        return
+    status_msg = await update.message.reply_text("🔄 Sheets senkronizasyonu başlatıldı...")
+    
+    try:
+        async with httpx.AsyncClient(timeout=30.0, follow_redirects=True) as client:
+            response = await client.get(f"{SHEETS_WEBHOOK}?action=sync")
+            if response.status_code == 200:
+                await status_msg.edit_text("✅ Sheets ile veriler başarıyla eşitlendi.")
+            else:
+                await status_msg.edit_text(f"❌ Senkronizasyon hatası: {response.status_code}")
+    except Exception as e:
+        await status_msg.edit_text(f"❌ Bağlantı hatası: {e}")
+
+async def cmd_repair_sheets(update: Update, context):
+    """Sheets tablolarını onar ve sütunları kontrol et"""
+    if str(update.effective_user.id) != str(ADMIN_ID):
+        return
+    status_msg = await update.message.reply_text("🔧 Sheets tabloları onarılıyor...")
+    
+    try:
+        async with httpx.AsyncClient(timeout=30.0, follow_redirects=True) as client:
+            response = await client.get(f"{SHEETS_WEBHOOK}?action=repair")
+            if response.status_code == 200:
+                await status_msg.edit_text("✅ Sheets tabloları ve formüller onarıldı.")
+            else:
+                await status_msg.edit_text(f"❌ Onarım hatası: {response.status_code}")
+    except Exception as e:
+        await status_msg.edit_text(f"❌ Bağlantı hatası: {e}")
+
+async def cmd_reply(update: Update, context):
+    """Admin'in kullanıcıya direkt yanıt vermesi"""
+    if str(update.effective_user.id) != str(ADMIN_ID):
+        return
+    
+    # Sadece son mesaj gönderen kullanıcıya yanıt ver
+    last_msg = last_user_message.get(str(ADMIN_ID))
+    if not last_msg:
+        await update.message.reply_text("⚠️ Henüz mesaj gönderen kullanıcı yok.")
+        return
+    
+    # /reply komutundan sonraki mesajı al
+    if not context.args:
+        await update.message.reply_text(
+            f"💬 *Yanıt Modu*\n\n"
+            f"Son mesaj: {last_msg['user_name']} ({last_msg['user_id']})\n\n"
+            f"Kullanım: `/reply mesajınız buraya`",
+            parse_mode="Markdown"
+        )
+        return
+    
+    message_text = " ".join(context.args)
+    
+    try:
+        await context.bot.send_message(
+            chat_id=int(last_msg['user_id']),
+            text=f"📩 *Admin'den Mesaj:*\n\n{message_text}",
+            parse_mode="Markdown"
+        )
+        await update.message.reply_text(f"✅ Mesaj gönderildi: {last_msg['user_name']}")
+    except Exception as e:
+        await update.message.reply_text(f"❌ Mesaj gönderilemedi: {e}")
+
+async def cmd_test_reject(update: Update, context):
+    """Admin için reddetme menüsünü test etmesi için sahte talep oluşturur"""
+    if str(update.effective_user.id) != str(ADMIN_ID):
+        return
+    
+    user_id = str(update.effective_user.id)
+    keyboard = []
+    for reason_key, reason_text in REJECTION_REASONS.items():
+        keyboard.append([InlineKeyboardButton(
+            reason_text, 
+            callback_data=f"manualreject_{user_id}_{reason_key}"
+        )])
+    
+    await update.message.reply_text(
+        "🧪 *Reddetme Test Modu*\n\n"
+        "Aşağıdaki butonlardan birine basarak reddetme mesajının size nasıl geleceğini test edebilirsiniz:",
+        reply_markup=InlineKeyboardMarkup(keyboard),
+        parse_mode="Markdown"
+    )
+
+async def cmd_reject_manual(update: Update, context):
+    """EKLİ KAYITLAR için manuel red (sebep ile)"""
+    if str(update.effective_user.id) != str(ADMIN_ID):
+        return
+    
+    # Kullanım: /reject [user_id]
+    if not context.args:
+        await update.message.reply_text(
+            "📝 *Manuel Red Komutu*\n\n"
+            "Kullanım: `/reject [user_id]`\n\n"
+            "Örnek: `/reject 123456789`\n\n"
+            "Sebep seçim menüsü açılacaktır.",
+            parse_mode="Markdown"
+        )
+        return
+    
+    user_id = context.args[0]
+    
+    # Red sebeplerini buton olarak göster
+    keyboard = []
+    for reason_key, reason_text in REJECTION_REASONS.items():
+        keyboard.append([InlineKeyboardButton(
+            reason_text, 
+            callback_data=f"manualreject_{user_id}_{reason_key}"
+        )])
+    
+    await update.message.reply_text(
+        f"❌ *Red Sebebi Seçin*\n\n"
+        f"🆔 User ID: `{user_id}`\n\n"
+        f"Bir sebep seçin:",
+        reply_markup=InlineKeyboardMarkup(keyboard),
+        parse_mode="Markdown"
+    )
+
+
+async def cmd_help(update: Update, context):
+    """Yardım"""
+    text = (
+        "📚 *Komutlar*\n\n"
+        "/start - Başla\n"
+        "/help - Yardım\n"
+    )
+    
+    if str(update.effective_user.id) == str(ADMIN_ID):
+        text += (
+            "\n*Admin Komutları:*\n"
+            "/pending - Bekleyen talepler\n"
+            "/status - Bot durumu\n"
+            "/reply \\[mesaj\\] - Kullanıcıya yanıt\n"
+            "/reject \\[user\\_id\\] - Manuel red (sebepli)\n"
+            "/test - Reddetme menüsünü test et\n"
+            "/notify\\_expired - Süresi dolanlara bildirim\n"
+            "/scan - Tarama yap\n"
+            "/sync - Verileri senkronize et\n"
+            "/repair - Tabloları onar"
+        )
+    
+    await update.message.reply_text(text, parse_mode="Markdown")
+
+async def handle_user_message(update: Update, context):
+    """Kullanıcıdan gelen mesajları yakala ve admin'e ilet"""
+    user = update.effective_user
+    
+    # Admin'in kendi mesajlarını işleme
+    if str(user.id) == str(ADMIN_ID):
+        return
+    
+    # Son mesajı kaydet (admin reply için)
+    last_user_message[str(ADMIN_ID)] = {
+        'user_id': str(user.id),
+        'user_name': user.first_name or user.username or "Kullanıcı"
+    }
+    
+    # Admin'e yönlendir
+    if ADMIN_ID:
+        try:
+            await context.bot.send_message(
+                chat_id=int(ADMIN_ID),
+                text=f"💬 *Yeni Mesaj*\n\n"
+                     f"👤 {user.first_name} (@{user.username or 'yok'})\n"
+                     f"🆔 `{user.id}`\n\n"
+                     f"📝 Mesaj:\n{update.message.text}\n\n"
+                     f"Yanıtlamak için: `/reply mesajınız`",
+                parse_mode="Markdown"
             )
-            logger.info(f"✓ Webhook set: {webhook_url}")
+        except Exception as e:
+            log.error(f"Admin'e mesaj iletilemedi: {e}")
+    
+    # Kullanıcıya otomatik yanıt
+    await update.message.reply_text(
+        "📨 Mesajınız iletildi!\n\n"
+        "Destek ekibimiz en kısa sürede size dönüş yapacaktır. 🙏"
+    )
+
+
+# ==================== BOT ENGINE ====================
+async def run_bot():
+    """Bot'u başlat"""
+    log.info("Bot başlatılıyor...")
+    
+    application = Application.builder().token(BOT_TOKEN).build()
+    
+    # Conversation handler - per_message=False uyarısını engellemek için explicit ayar
+    conv_handler = ConversationHandler(
+        entry_points=[
+            CommandHandler("start", cmd_start),
+            CallbackQueryHandler(plan_selected, pattern="^(plan_|trial)")
+        ],
+        states={
+            TRADINGVIEW: [MessageHandler(filters.TEXT & ~filters.COMMAND, receive_tradingview)],
+            TXID: [MessageHandler(filters.TEXT & ~filters.COMMAND, receive_txid)]
+        },
+        fallbacks=[CommandHandler("cancel", cmd_cancel)],
+        conversation_timeout=600,
+        per_message=False,  # Explicit: callback query tracking devre dışı
+        per_chat=True,       # Her chat için ayrı conversation state
+        per_user=True        # Her user için ayrı conversation state
+    )
+    
+    application.add_handler(conv_handler)
+    application.add_handler(CommandHandler("help", cmd_help))
+    application.add_handler(CommandHandler("pending", cmd_pending))
+    application.add_handler(CommandHandler("status", cmd_status))
+    application.add_handler(CommandHandler("reply", cmd_reply))
+    application.add_handler(CommandHandler("reject", cmd_reject_manual))
+    application.add_handler(CommandHandler("test", cmd_test_reject))
+    application.add_handler(CommandHandler("notify_expired", cmd_notify_expired))
+    application.add_handler(CommandHandler("scan", cmd_scan))
+    application.add_handler(CommandHandler("sync", cmd_sync))
+    application.add_handler(CommandHandler("repair", cmd_repair_sheets))
+    application.add_handler(CallbackQueryHandler(admin_callback, pattern="^(approve_|reject|rejectreason|manualreject)"))
+    
+    # Kullanıcı mesajlarını yakala (ConversationHandler dışında)
+    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_user_message))
+
+    
+    await application.initialize()
+    
+    # ÖNEMLİ: Conflict önleme - mevcut webhook ve oturumları temizle
+    log.info("🔄 Telegram oturumu temizleniyor...")
+    for attempt in range(5):
+        try:
+            # Webhook varsa sil
+            await application.bot.delete_webhook(drop_pending_updates=True)
+            log.info("✅ Webhook silindi, bekleyen güncellemeler atıldı")
+            
+            # Önceki oturumu sonlandırmak için kısa bir getUpdates çağrısı
+            await asyncio.sleep(1)
+            await application.bot.get_updates(offset=-1, timeout=1)
+            log.info("✅ Önceki oturum temizlendi")
+            break
+        except Conflict:
+            log.warning(f"⚠️ Conflict tespit edildi (deneme {attempt+1}/5), bekleniyor...")
+            await asyncio.sleep(5 * (attempt + 1))
+        except Exception as e:
+            log.warning(f"⚠️ Temizlik hatası: {e}")
+            await asyncio.sleep(2)
+    
+    await application.start()
+    BOT_STATUS["running"] = True
+    log.info("✅ Bot başlatıldı - polling modunda")
+    
+    # Polling loop
+    offset = None
+    while not SHUTDOWN.is_set():
+        try:
+            updates = await application.bot.get_updates(
+                offset=offset, timeout=30, allowed_updates=Update.ALL_TYPES
+            )
+            for upd in updates:
+                offset = upd.update_id + 1
+                await application.process_update(upd)
+        except TimedOut:
+            continue
+        except RetryAfter as e:
+            log.warning(f"⏳ Rate limit - {e.retry_after} saniye bekleniyor...")
+            await asyncio.sleep(e.retry_after + 1)
+        except Conflict:
+            # 🔴 KRİTİK: Conflict = başka instance çalışıyor = BOT TAMAMEN DURMALI
+            log.error("="*60)
+            log.error("🔴 FATAL: CONFLICT - Başka bir bot instance çalışıyor!")
+            log.error("🔴 Bu bot instance'ı DURDURULUYOR.")
+            log.error("🔴 Lütfen Railway'de tek instance olduğundan emin olun.")
+            log.error("="*60)
+            BOT_STATUS["running"] = False
+            BOT_STATUS["errors"] += 1
+            SHUTDOWN.set()  # Bot'u kalıcı olarak durdur
+            break  # Polling döngüsünden çık
+        except (NetworkError, TelegramError) as e:
+            log.warning(f"⚠️ Ağ hatası: {e}")
+            await asyncio.sleep(5)
+        except Exception as e:
+            BOT_STATUS["errors"] += 1
+            log.error(f"❌ Beklenmeyen hata: {e}")
+            await asyncio.sleep(5)
+    
+    await application.stop()
+    await application.shutdown()
+
+def bot_thread():
+    """Bot thread'i"""
+    while not SHUTDOWN.is_set():
+        BOT_STATUS["restarts"] += 1
+        log.info(f"🚀 Bot başlatılıyor (#{BOT_STATUS['restarts']})")
         
-        asyncio.run(setup_webhook())
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
         
-        logger.info(f"🌐 Starting Flask on port {PORT}...")
-        flask_app.run(host="0.0.0.0", port=PORT, use_reloader=False, threaded=True)
+        try:
+            loop.run_until_complete(run_bot())
+        except Exception as e:
+            log.error(f"Bot çöktü: {e}")
+            BOT_STATUS["running"] = False
+        finally:
+            loop.close()
         
-    else:
-        # ==================== POLLING MODE (FIXED ARCHITECTURE) ====================
-        # Flask is MAIN process (for health checks)
-        # Telegram polling runs in BACKGROUND thread
-        logger.info("📡 Running in POLLING mode")
-        logger.info(f"✓ Starting health server on port {PORT}")
-        
-        # Initialize Telegram app
-        async def init_telegram():
-            await telegram_app.initialize()
-            # Clear webhook to use polling
-            await telegram_app.bot.delete_webhook(drop_pending_updates=True)
-            await telegram_app.start()
-            logger.info("✓ Telegram app initialized")
-        
-        asyncio.run(init_telegram())
-        
-        # Run Telegram polling in background thread
-        def run_telegram_polling():
-            """Background thread for Telegram polling"""
-            logger.info("📡 Starting Telegram polling thread...")
-            try:
-                # Create new event loop for this thread
-                loop = asyncio.new_event_loop()
-                asyncio.set_event_loop(loop)
-                
-                # Polling loop
-                while True:
-                    try:
-                        updates = loop.run_until_complete(
-                            telegram_app.bot.get_updates(
-                                timeout=30,
-                                allowed_updates=Update.ALL_TYPES
-                            )
-                        )
-                        for update in updates:
-                            loop.run_until_complete(telegram_app.process_update(update))
-                            # Acknowledge the update
-                            loop.run_until_complete(
-                                telegram_app.bot.get_updates(
-                                    offset=update.update_id + 1,
-                                    timeout=0
-                                )
-                            )
-                    except Exception as e:
-                        logger.error(f"Polling error: {e}")
-                        import time
-                        time.sleep(5)
-            except Exception as e:
-                logger.error(f"Polling thread crashed: {e}")
-        
-        # Start polling thread
-        polling_thread = threading.Thread(target=run_telegram_polling, daemon=True)
-        polling_thread.start()
-        logger.info("✓ Telegram polling thread started")
-        
-        # Flask as MAIN process (blocking)
-        logger.info(f"🌐 Flask server ready on port {PORT}")
-        flask_app.run(host="0.0.0.0", port=PORT, use_reloader=False, threaded=True)
+        if not SHUTDOWN.is_set():
+            log.info("♻️ 3 saniye sonra yeniden başlatılacak...")
+            time.sleep(3)
+
+
+
+def signal_handler(signum, frame):
+    """Graceful shutdown"""
+    log.info("⚠️ Kapatma sinyali alındı...")
+    SHUTDOWN.set()
+    time.sleep(2)
+    sys.exit(0)
+
+def main():
+    signal.signal(signal.SIGTERM, signal_handler)
+    signal.signal(signal.SIGINT, signal_handler)
+    
+    if not BOT_TOKEN:
+        log.error("❌ BOT_TOKEN bulunamadı!")
+        app.run(host="0.0.0.0", port=PORT)
+        return
+    
+    log.info("=" * 50)
+    log.info("🌴 Malibu Telegram Bot v1.0")
+    log.info(f"📊 Sheets Webhook: {'✅' if SHEETS_WEBHOOK else '❌'}")
+    log.info(f"👤 Admin ID: {ADMIN_ID}")
+    log.info(f"🔌 Port: {PORT}")
+    log.info("=" * 50)
+    
+    # Bot thread
+    threading.Thread(target=bot_thread, daemon=False).start()
+    
+    # Flask
+    app.run(host="0.0.0.0", port=PORT, threaded=True, use_reloader=False)
 
 if __name__ == "__main__":
     main()
-

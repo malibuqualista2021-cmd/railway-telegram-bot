@@ -1,0 +1,3281 @@
+﻿// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+// HarmonicPRZ Malibu v6.1 - Harmonic Pattern Detection Indicator
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+// Author: Malibu
+// Version: 6.1 (Polished)
+// License: MIT
+//
+// DESCRIPTION:
+// Advanced harmonic pattern detector with multi-timeframe ZigZag analysis.
+// Supports Gartley, Bat, Butterfly, Shark, Cypher and AB=CD patterns.
+// Includes S/R confluence, momentum filters and quality scoring system.
+//
+// CHANGELOG:
+// v6.1 (2025-01-16):
+//  - Fixed Turkish character encoding (ÄŸ, ÅŸ, Ä±, Ã¶, Ã§, Ä, Å, Ä°, Ã–, Ã‡)
+//  - Added comprehensive header documentation
+//  - Standardized comment styles throughout
+//  - Code formatting and consistency improvements
+//
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+//@version=6
+indicator('HarmonicPRZ Malibu', shorttitle='HarmonicPRZ Malibu', overlay=true, max_bars_back=5000, max_lines_count=500, max_labels_count=500, max_boxes_count=500, explicit_plot_zorder=true)
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â• COLOR CONSTANTS â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+var color C_WIN = #00E676, var color C_LOSS = #FF5252, var color C_SCORE = color.aqua
+var color C_HDR = color.new(#FF5722, 50), var color C_BG = color.new(#333333, 50)
+// â•â•â•â• SAFETY CONSTANTS (Red Team) ===================
+var float BLACK_SWAN_ATR_MULT = 5.0      // Extreme move threshold
+var float BLACK_SWAN_VOL_MULT = 10.0     // Volume spike threshold
+var float GAP_ATR_MULT = 3.0             // Gap detection threshold
+var float MIN_MOVE_ATR_MULT = 0.1        // Noise filter threshold
+var int MIN_HISTORY_BARS = 50            // Minimum bars for signal
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â• KORUYUCU MÄ°MARÄ° SABÄ°TLERÄ° (v6.1 - OPTIMIZED) â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+// PERFORMANCE TUNING: These limits prevent timeout on high-frequency timeframes
+// Lower values = faster execution, higher values = more accurate detection
+var int SAFE_LOOKBACK_LIMIT = 50          // SR lookback - f_calculateSRConfluence
+var int SAFE_TP_CHECK_LIMIT = 30          // TP check - f_drawBreakoutPattern (was 200)
+var int SAFE_CANDIDATE_SEARCH = 30        // Candidate C search - f_findCandidateC (was 500)
+var int SAFE_HIGHLANDER_CHECK = 25        // Highlander check - f_highlanderCheck
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â• CACHED PIVOT ARRAYS (S/R Accuracy Preserved) â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+// Pre-calculate pivots ONCE per bar, then use cached values in loops
+var array<float> cachedPivotHighs = array.new<float>(0)
+var array<float> cachedPivotLows = array.new<float>(0)
+var array<int> cachedPivotHighBars = array.new<int>(0)
+var array<int> cachedPivotLowBars = array.new<int>(0)
+// NOTE: Pivot cache update moved to global scope (after TA calculations)
+// because Pine Script v6 doesn't allow modifying global vars inside functions
+type PatternConfig
+    string name
+    float xab_min
+    float xab_max
+    float abc_min
+    float abc_max
+    float xad
+    float prz_bc
+    float prz_abcd
+    float prz_ba
+    bool cBeyondA
+    bool usesXAC
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+// âš ï¸ STATISTICS SYSTEM DATA MODEL (FUTURE REFACTOR)
+// Currently using 20+ parallel arrays (patTypes, patBars, patPrzTop, etc.)
+// TODO: Refactor to single PatternData[] array using this type:
+//
+// type PatternData
+//     // Identification
+//     string patType
+//     int patBar
+//     bool isBull
+//     bool evaluated
+//     // Price Levels
+//     float przTop, przBot, tp1, sl, entry
+//     // Pattern Points
+//     float pX, pA, pB, pC, pD
+//     int pXbar, pAbar, pBbar, pCbar, pDbar
+//     // Quality
+//     string quality
+//     float score
+//     bool filterPassed
+//
+// BENEFITS: Reduces array count from 20+ to 1, improves cache locality,
+// eliminates synchronization bugs, simplifies code maintenance.
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+grpCore = ">> TEMEL AYARLAR"
+useAutoPilot = input.bool(true, "", inline="ap1", group=grpCore, display=display.none, tooltip="[OK] ACIK: Tum parametreler zaman dilimine gore otomatik optimize edilir.\n[X] KAPALI: Manuel hassasiyet ayarlari devreye girer.")
+masterComplexity = input.int(65, "Oto-Pilot / Sinyal Yogunlugu", inline="ap1", minval=0, maxval=100, group=grpCore, display=display.none, tooltip="0=Secici (az sinyal), 65=Dengeli (onerilen), 100=Agresif (cok sinyal)")
+grpConfirm = ">> TEMEL AYARLAR"
+showPRZ = input.bool(false, "PRZ Kutularini Goster", group=grpConfirm, tooltip="D noktasindaki PRZ (Potansiyel Donus Bolgesi) kutularini cizer.")
+hideUntouchedPRZ = input.bool(false, "Sadece D Teyitli Patternleri Goster", group=grpConfirm, tooltip="Aktif edilirse, fiyat D kutusuna (PRZ) hic degmemisse tum formasyon gizlenir.")
+statsQualityFilter = "A+, A ve B"
+useRSIConfluence = true
+rsiDivergenceRequired = false
+minScoreThreshold = 70
+maxPatternsVisible = input.int(25, "Max Pattern Sayisi", minval=5, maxval=50, group=grpConfirm, display=display.none, tooltip="Ekranda gosterilecek maksimum pattern sayisi. Dusuk = daha temiz grafik.")
+preventOverlap = input.bool(true, "Cakisan Pattern Engelle", group=grpConfirm, tooltip="Ayni yonde yakin pattern'leri engeller.")
+hideLowScorePatterns = input.bool(false, "Dusuk Skorlu Patternleri Gizle", group=grpConfirm, tooltip="ACIK: Hibrit skoru dusuk olan pattern'leri grafikten gizler.")
+rsiLength = 14
+rsiOB = 70.0
+rsiOS = 30.0
+useATRFilter = true
+atrPeriod = 14
+atrMultiplier = 1.0
+zig1On = input.bool(true, "[PRO] L1", inline="zig1", group=grpCore, display=display.none, tooltip="ZigZag Seviye 1: Scalping (1-5dk).")
+zigLen1 = input.int(3, "Derinlik", inline="zig1", minval=2, maxval=20, group=grpCore, display=display.none)
+zig2On = input.bool(true, "[PRO] L2", inline="zig2", group=grpCore, display=display.none, tooltip="ZigZag Seviye 2: Intraday (15dk-1H).")
+zigLen2 = input.int(5, "Derinlik", inline="zig2", minval=2, maxval=30, group=grpCore, display=display.none)
+zig3On = input.bool(true, "[PRO] L3", inline="zig3", group=grpCore, display=display.none, tooltip="ZigZag Seviye 3: Swing (4H-Daily).")
+zigLen3 = input.int(8, "Derinlik", inline="zig3", minval=3, maxval=50, group=grpCore, display=display.none)
+zig4On = input.bool(true, "[PRO] L4", inline="zig4", group=grpCore, display=display.none, tooltip="ZigZag Seviye 4: Position (Weekly).")
+zigLen4 = input.int(21, "Derinlik", inline="zig4", minval=10, maxval=100, group=grpCore, display=display.none)
+globalErrorPct = 0.08
+przBars = 20
+pot_showPotential = input.bool(true, "Potansiyel Formasyonlari Goster", group=grpConfirm, tooltip="ACIK: Henuz tamamlanmamis (D noktasina ulasmamis) potansiyel formasyonlari gosterir.")
+pot_labelPrefix = "â³"
+gartleyOn = input.bool(true, "", inline="patRow1", group=grpCore, tooltip="Gartley")
+colGartley = input.color(#4CAF50, "Gartley", inline="patRow1", group=grpCore)
+batOn = input.bool(true, "", inline="patRow1", group=grpCore, tooltip="Bat")
+colBat = input.color(#2196F3, "Bat", inline="patRow1", group=grpCore)
+butterflyOn = input.bool(true, "", inline="patRow1", group=grpCore, tooltip="Butterfly")
+colButterfly = input.color(#9C27B0, "Bfly", inline="patRow1", group=grpCore)
+sharkOn = input.bool(true, "", inline="patRow2", group=grpCore, tooltip="Shark")
+colShark = input.color(#FF9800, "Shark", inline="patRow2", group=grpCore)
+cypherOn = input.bool(true, "", inline="patRow2", group=grpCore, tooltip="Cypher")
+colCypher = input.color(#F44336, "Cypher", inline="patRow2", group=grpCore)
+abcdOn = input.bool(false, "", inline="patRow2", group=grpCore, tooltip="AB=CD")
+colAbcd = input.color(#FFEB3B, "AB=CD", inline="patRow2", group=grpCore)
+altAbcdOn = input.bool(false, "Alt AB=CD", group=grpCore, tooltip="Alternatif AB=CD oranlarini kullan.")
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+// KALITE SKOR FILTRELEME AYARLARI
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+grpStatsFilter = ">> SKOR VE FILTRELER"
+i_enableFiltering = input.bool(true, "Filtrelenmis Istatistik Kullan", group=grpStatsFilter, tooltip="ACIK: FWR% sutununda sadece kaliteli (skoru yuksek) pattern'leri sayar.\nKAPALI: FWR% sutununda tum pattern'leri sayar (filtre yok).")
+i_compactStats = input.bool(false, "Kompakt Istatistik Tablosu", group=grpStatsFilter, tooltip="ACIK: Sadece Pattern | Count | FWR% gosterir. KAPALI: Tum detaylari gosterir.")
+grpScoreThreshold = ">> SKOR VE FILTRELER"
+i_useAutoThreshold = input.bool(true, "Otomatik Timeframe Bazli Esik", group=grpScoreThreshold, tooltip="ACIK: 5m=30, 15m=25, 1h=20, 4h=15. KAPALI: Manuel esik kullanilir.")
+i_manualThreshold = input.int(25, "Manuel Minimum Skor", minval=0, maxval=100, group=grpScoreThreshold, tooltip="Otomatik kapaliyken kullanilacak minimum kalite skoru. Ortalama skorlar 20-30 arasi cikiyor.")
+grpScoreComponents = ">> SKOR VE FILTRELER"
+i_useSRConfluence = input.bool(true, "S/R Cakismasi (+15)", group=grpScoreComponents, tooltip="PRZ'nin pivot noktalarina yakinligini kontrol eder.")
+i_useVolumeConfirm = input.bool(true, "Volume Teyidi (+10/-3)", group=grpScoreComponents, tooltip="D noktasinda volume spike kontrolu. Kripto icin kritik.")
+i_useRSIDivergence = input.bool(false, "RSI Divergence (+10)", group=grpScoreComponents, tooltip="Pattern yonuyle uyumlu RSI divergence arar. Opsiyonel guclendirme.")
+i_useTrendPenalty = input.bool(false, "Trend Uyumsuzluk Cezasi (-5)", group=grpScoreComponents, tooltip="Counter-trend pattern'lere ceza verir.")
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+// GELIÅMIÅ MOMENTUM FILTRELERI
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+grpAdvancedMomentum = ">> GELISMIS MOMENTUM"
+i_useADXFilter = input.bool(false, "ADX Trend Strength (+10)", group=grpAdvancedMomentum, tooltip="ADX > 20 oldugunda trend guculu kabul edilir. Zayif trendlerde false signal riski yuksektir.")
+i_adxThreshold = input.int(20, "ADX Minimum Esik", minval=10, maxval=50, group=grpAdvancedMomentum, display=display.none)
+i_useBBFilter = input.bool(false, "Bollinger Squeeze (+8)", group=grpAdvancedMomentum, tooltip="BB squeeze sonrasi expansion pattern'leri dogrular. Volatilite breakout'ini yakalar.")
+i_bbLength = input.int(20, "BB Period", minval=5, maxval=50, group=grpAdvancedMomentum, display=display.none)
+i_bbMult = input.float(2.0, "BB Carpan", minval=1.0, maxval=3.0, step=0.1, group=grpAdvancedMomentum, display=display.none)
+i_useStochFilter = input.bool(false, "Stochastic Cross (+8)", group=grpAdvancedMomentum, tooltip="Stochastic %K/%D cross confirmation. Oversold/Overbound zone cikisi teyidi.")
+i_stochK = input.int(14, "Stochastic %K", minval=5, maxval=30, group=grpAdvancedMomentum, display=display.none)
+i_stochD = input.int(3, "Stochastic %D", minval=1, maxval=10, group=grpAdvancedMomentum, display=display.none)
+i_useMACDFilter = input.bool(false, "MACD Momentum (+8)", group=grpAdvancedMomentum, tooltip="MACD histogram direction shift. Momentum degisimini yakalar.")
+i_macdFast = input.int(12, "MACD Fast", minval=5, maxval=20, group=grpAdvancedMomentum, display=display.none)
+i_macdSlow = input.int(26, "MACD Slow", minval=20, maxval=40, group=grpAdvancedMomentum, display=display.none)
+i_macdSignal = input.int(9, "MACD Signal", minval=5, maxval=15, group=grpAdvancedMomentum, display=display.none)
+i_useABCDTimeSym = input.bool(false, "AB=CD Time Symmetry (+5)", group=grpAdvancedMomentum, tooltip="AB ve CD bacaklarinin zaman simetrisini kontrol eder. %20 tolerans.")
+grpScoreDisplay = ">> SKOR VE FILTRELER"
+i_showScoreInTooltip = input.bool(true, "Tooltip'te Skor Goster", group=grpScoreDisplay, tooltip="Pattern label'inda tooltip'te kalite skorunu gosterir (bilgi amacli).")
+// Istatistik tablosu tooltip'leri artik dogrudan table.cell icinde
+showPointX = true
+showPointA = true
+showPointB = true
+showPointC = true
+showPointD = true
+showXALine = true
+showABLine = true
+showBCLine = true
+showCDLine = true
+showXBLine = true
+showACLine = true
+showBDLine = true
+pot_grpPotential = grpCore
+grpGartley = ">> GARTLEY AYARLARI"
+grpBat = ">> BAT AYARLARI"
+grpButterfly = ">> BUTTERFLY AYARLARI"
+grpShark = ">> SHARK AYARLARI"
+grpCypher = ">> CYPHER AYARLARI"
+// GARTLEY
+g_xab_min_on = input.bool(true, "", inline="gB1", group=grpGartley, display=display.none)
+gartley_xab_min = input.float(0.618, "Gartley: XA Fib B Min", inline="gB1", minval=0.5, maxval=0.886, step=0.001, group=grpGartley, display=display.none, tooltip="B noktasi XA minimum retracement. User: 0.618")
+g_xab_max_on = input.bool(true, "", inline="gB2", group=grpGartley, display=display.none)
+gartley_xab_max = input.float(0.618, "Gartley: XA Fib B Max", inline="gB2", minval=0.5, maxval=0.886, step=0.001, group=grpGartley, display=display.none, tooltip="B noktasi XA maksimum retracement. User: 0.618 (SABIT)")
+g_abc_min_on = input.bool(true, "", inline="gC1", group=grpGartley, display=display.none)
+gartley_abc_min = input.float(0.618, "Gartley: AB Fib C Min", inline="gC1", minval=0.382, maxval=0.886, step=0.001, group=grpGartley, display=display.none, tooltip="C noktasi AB minimum retracement. User: 0.618")
+g_abc_max_on = input.bool(true, "", inline="gC2", group=grpGartley, display=display.none)
+gartley_abc_max = input.float(0.618, "Gartley: AB Fib C Max", inline="gC2", minval=0.5, maxval=0.886, step=0.001, group=grpGartley, display=display.none, tooltip="C noktasi AB maksimum retracement. User: 0.618 (SABIT)")
+g_xad_on = input.bool(true, "", inline="gD1", group=grpGartley, display=display.none)
+gartley_xad = input.float(0.786, "Gartley: XA Fib D Hedef", inline="gD1", minval=0.618, maxval=0.886, step=0.001, group=grpGartley, display=display.none, tooltip="D noktasi XA retracement. User: 0.786")
+g_prz_bc_on = input.bool(false, "", inline="gD2", group=grpGartley, display=display.none)
+gartley_prz_bc = input.float(1.414, "Gartley: PRZ: BC Projeksiyon", inline="gD2", minval=1.13, maxval=2.0, step=0.001, group=grpGartley, display=display.none, tooltip="BC Projeksiyon. User: KAPALI")
+g_prz_ba_on = input.bool(false, "", inline="gPRZ1", group=grpGartley, display=display.none)
+gartley_prz_ba = input.float(1.272, "Gartley: PRZ: BA Ext", inline="gPRZ1", minval=1.0, maxval=2.0, step=0.001, group=grpGartley, display=display.none, tooltip="BA Extension. User: KAPALI")
+g_prz_abcd_on = input.bool(false, "", inline="gPRZ2", group=grpGartley, display=display.none)
+gartley_prz_abcd = input.float(1.0, "Gartley: PRZ: AB=CD", inline="gPRZ2", minval=0.886, maxval=1.272, step=0.001, group=grpGartley, display=display.none, tooltip="AB=CD Orani. User: KAPALI")
+// BAT
+b_xab_min_on = input.bool(true, "", inline="b1", group=grpBat, display=display.none)
+bat_xab_min = input.float(0.50, "Bat: XA Fib B Min", inline="b1", minval=0.1, maxval=1.0, step=0.01, group=grpBat, display=display.none)
+b_xab_max_on = input.bool(true, "", inline="b2", group=grpBat, display=display.none)
+bat_xab_max = input.float(0.50, "Bat: XA Fib B Max", inline="b2", minval=0.1, maxval=1.0, step=0.01, group=grpBat, display=display.none)
+b_abc_min_on = input.bool(true, "", inline="b3", group=grpBat, display=display.none)
+bat_abc_min = input.float(0.382, "Bat: AB Fib C Min", inline="b3", minval=0.1, maxval=1.5, step=0.01, group=grpBat, display=display.none)
+b_abc_max_on = input.bool(true, "", inline="b4", group=grpBat, display=display.none)
+bat_abc_max = input.float(0.886, "Bat: AB Fib C Max", inline="b4", minval=0.1, maxval=1.5, step=0.01, group=grpBat, display=display.none)
+b_xad_on = input.bool(true, "", inline="b5", group=grpBat, display=display.none)
+bat_xad = input.float(0.886, "Bat: XA Fib D Hedef", inline="b5", minval=0.5, maxval=1.5, step=0.01, group=grpBat, display=display.none)
+b_prz_bc_on = input.bool(false, "", inline="b6", group=grpBat, display=display.none)
+bat_prz_bc = input.float(2.0, "Bat: PRZ: BC Projeksiyon", inline="b6", minval=1.0, maxval=3.0, step=0.01, group=grpBat, display=display.none)
+b_prz_abcd_on = input.bool(false, "", inline="b7", group=grpBat, display=display.none)
+bat_prz_abcd = input.float(1.272, "Bat: PRZ: Alt AB=CD", inline="b7", minval=0.5, maxval=2.0, step=0.01, group=grpBat, display=display.none)
+b_prz_ba_on = input.bool(false, "", inline="b8", group=grpBat, display=display.none)
+bat_prz_ba = input.float(1.618, "Bat: PRZ: AB Extension", inline="b8", minval=1.0, maxval=2.5, step=0.01, group=grpBat, display=display.none)
+// BUTTERFLY
+bf_xab_min_on = input.bool(true, "", inline="bf1", group=grpButterfly, display=display.none)
+butterfly_xab_min = input.float(0.786, "Butterfly: XA Fib B Min", inline="bf1", minval=0.1, maxval=1.0, step=0.01, group=grpButterfly, display=display.none)
+bf_xab_max_on = input.bool(true, "", inline="bf2", group=grpButterfly, display=display.none)
+butterfly_xab_max = input.float(0.786, "Butterfly: XA Fib B Max", inline="bf2", minval=0.1, maxval=1.0, step=0.01, group=grpButterfly, display=display.none)
+bf_abc_min_on = input.bool(true, "", inline="bf3", group=grpButterfly, display=display.none)
+butterfly_abc_min = input.float(0.618, "Butterfly: AB Fib C Min", inline="bf3", minval=0.1, maxval=1.5, step=0.01, group=grpButterfly, display=display.none)
+bf_abc_max_on = input.bool(true, "", inline="bf4", group=grpButterfly, display=display.none)
+butterfly_abc_max = input.float(0.786, "Butterfly: AB Fib C Max", inline="bf4", minval=0.1, maxval=1.5, step=0.01, group=grpButterfly, display=display.none)
+bf_xad_on = input.bool(true, "", inline="bf5", group=grpButterfly, display=display.none)
+butterfly_xad = input.float(1.272, "Butterfly: XA Fib D Hedef", inline="bf5", minval=1.0, maxval=2.0, step=0.01, group=grpButterfly, display=display.none)
+bf_prz_bc_on = input.bool(false, "", inline="bf6", group=grpButterfly, display=display.none)
+butterfly_prz_bc = input.float(2.0, "Butterfly: PRZ: BC Projeksiyon", inline="bf6", minval=1.0, maxval=3.0, step=0.01, group=grpButterfly, display=display.none)
+bf_prz_abcd_on = input.bool(false, "", inline="bf7", group=grpButterfly, display=display.none)
+butterfly_prz_abcd = input.float(1.272, "Butterfly: PRZ: Alt AB=CD", inline="bf7", minval=0.5, maxval=2.0, step=0.01, group=grpButterfly, display=display.none)
+bf_prz_ba_on = input.bool(false, "", inline="bf8", group=grpButterfly, display=display.none)
+butterfly_prz_ba = input.float(1.618, "Butterfly: PRZ: BA Extension", inline="bf8", minval=1.0, maxval=2.5, step=0.01, group=grpButterfly, display=display.none)
+// SHARK
+s_xab_min_on = input.bool(true, "", inline="s1", group=grpShark, display=display.none)
+shark_xab_min = input.float(0.618, "Shark: XA Fib B Min", inline="s1", minval=0.1, maxval=1.0, step=0.01, group=grpShark, display=display.none)
+s_xab_max_on = input.bool(true, "", inline="s2", group=grpShark, display=display.none)
+shark_xab_max = input.float(0.786, "Shark: XA Fib B Max", inline="s2", minval=0.1, maxval=1.0, step=0.01, group=grpShark, display=display.none)
+s_abc_min_on = input.bool(true, "", inline="s3", group=grpShark, display=display.none)
+shark_abc_min = input.float(1.13, "Shark: AB Fib C Min", inline="s3", minval=0.5, maxval=2.0, step=0.01, group=grpShark, display=display.none)
+s_abc_max_on = input.bool(true, "", inline="s4", group=grpShark, display=display.none)
+shark_abc_max = input.float(1.414, "Shark: AB Fib C Max", inline="s4", minval=0.5, maxval=2.5, step=0.01, group=grpShark, display=display.none)
+s_xad_min_on = input.bool(true, "", inline="s5", group=grpShark, display=display.none)
+shark_xad_min = input.float(0.886, "Shark: XA Fib D Min", inline="s5", minval=0.5, maxval=1.5, step=0.01, group=grpShark, display=display.none)
+s_xad_max_on = input.bool(true, "", inline="s6", group=grpShark, display=display.none)
+shark_xad_max = input.float(1.13, "Shark: XA Fib D Max", inline="s6", minval=0.5, maxval=1.5, step=0.01, group=grpShark, display=display.none)
+s_prz_bc_on = input.bool(false, "", inline="s7", group=grpShark, display=display.none)
+shark_prz_bc = input.float(1.618, "Shark: PRZ: BC Projeksiyon", inline="s7", minval=1.0, maxval=3.0, step=0.01, group=grpShark, display=display.none)
+s_prz_abcd_on = input.bool(false, "", inline="s8", group=grpShark, display=display.none)
+shark_prz_abcd = input.float(1.618, "Shark: PRZ: Extended AB=CD", inline="s8", minval=1.0, maxval=2.5, step=0.01, group=grpShark, display=display.none)
+s_prz_ba_on = input.bool(false, "", inline="s9", group=grpShark, display=display.none)
+shark_prz_ba = input.float(2.24, "Shark: PRZ: BC Proj High", inline="s9", minval=1.5, maxval=3.0, step=0.01, group=grpShark, display=display.none)
+// CYPHER
+c_xab_min_on = input.bool(true, "", inline="c1", group=grpCypher, display=display.none)
+cypher_xab_min = input.float(0.382, "Cypher: XA Fib B Min", inline="c1", minval=0.1, maxval=1.0, step=0.01, group=grpCypher, display=display.none)
+c_xab_max_on = input.bool(true, "", inline="c2", group=grpCypher, display=display.none)
+cypher_xab_max = input.float(0.618, "Cypher: XA Fib B Max", inline="c2", minval=0.1, maxval=1.0, step=0.01, group=grpCypher, display=display.none)
+c_xac_min_on = input.bool(true, "", inline="c3", group=grpCypher, display=display.none)
+cypher_xac_min = input.float(1.272, "Cypher: XA Fib C Min (Ext)", inline="c3", minval=1.0, maxval=2.0, step=0.01, group=grpCypher, display=display.none)
+c_xac_max_on = input.bool(true, "", inline="c4", group=grpCypher, display=display.none)
+cypher_xac_max = input.float(1.414, "Cypher: XA Fib C Max (Ext)", inline="c4", minval=1.0, maxval=2.0, step=0.01, group=grpCypher, display=display.none)
+c_xcd_on = input.bool(true, "", inline="c5", group=grpCypher, display=display.none)
+cypher_xcd = input.float(0.786, "Cypher: XC Fib D Hedef", inline="c5", minval=0.5, maxval=1.0, step=0.01, group=grpCypher, display=display.none)
+c_prz_bc_on = input.bool(false, "", inline="c6", group=grpCypher, display=display.none)
+cypher_prz_bc = input.float(1.272, "Cypher: PRZ: BC Projeksiyon", inline="c6", minval=1.0, maxval=2.0, step=0.01, group=grpCypher, display=display.none)
+c_prz_abcd_on = input.bool(false, "", inline="c7", group=grpCypher, display=display.none)
+cypher_prz_abcd = input.float(1.272, "Cypher: PRZ: AB=CD", inline="c7", minval=0.5, maxval=2.0, step=0.01, group=grpCypher, display=display.none)
+c_prz_ba_on = input.bool(false, "", inline="c8", group=grpCypher, display=display.none)
+cypher_prz_ba = input.float(1.272, "Cypher: PRZ: BA Retracement", inline="c8", minval=1.0, maxval=2.0, step=0.01, group=grpCypher, display=display.none)
+grpRisk = ">> RISK YONETIMI"
+showEntry = input.bool(true, "Entry Goster", group=grpRisk, display=display.none, tooltip="Entry cizgisini grafikte goster/gizle")
+showTP = input.bool(true, "Take Profit Goster", group=grpRisk, display=display.none, tooltip="Take Profit cizgisini grafikte goster/gizle")
+showSL = input.bool(true, "Stop Loss Goster", group=grpRisk, display=display.none, tooltip="Stop Loss cizgisini grafikte goster/gizle")
+useGlobalSLMult = input.bool(false, "", inline="slm", group=grpRisk, display=display.none, tooltip="ACIK: Asagidaki Stop Loss carpanini tum sinyallere uygular.\nKAPALI: Sinyaller standart (x1) stop mesafesiyle calisir (Manuel modlar aktifken otomatik kapanir).")
+slGlobalMultiplier = input.float(1.0, "Stop Loss Carpani", inline="slm", minval=0.5, maxval=3.0, step=0.1, group=grpRisk, display=display.none, tooltip="Stop Loss Mesafesi: Pozisyonun zarar durumunda otomatik kapanacagi mesafeyi belirler.\n1.0 = Standart guvenli bolge.\n1.5 = %50 daha genis (daha az stop olma riski ama daha buyuk zarar).\n0.7 = %30 daha dar (daha riskli ama daha kucuk zarar).\nNot: Manuel SL/TP aktifse bu carpan devre disi kalir.")
+useManualTP = input.bool(true, "", inline="mtp", group=grpRisk, display=display.none, tooltip="[OK] ACIK: Otomatik Fibonacci hedefleri yerine asagidaki CD bacagi oranini kullanir.\nOrn: Sinyal boyu (CD) kadar kar hedeflemek icin 1.0 yazin.")
+manualTPRatio = input.float(0.18, "Manuel TP / Oran (CDx)", inline="mtp", minval=0.1, maxval=3.0, step=0.001, group=grpRisk, display=display.none, tooltip="Kar Al Hedefi (CD Kati): D noktasindan itibaren CD bacaginin kac kati hedeflenecek.\n0.18 = CD bacaginin %18'i (Hizli kar - Yuksek WR).")
+useManualSL = input.bool(true, "", inline="msl", group=grpRisk, display=display.none, tooltip="[OK] ACIK: Standart stop mantigi yerine asagidaki sabit orani kullanir.\nNOT: Aktifken Global SL Carpani devre disi kalir.")
+manualSLRatio = input.float(0.18, "Manuel SL / Oran", inline="msl", minval=0.1, maxval=3.0, step=0.001, group=grpRisk, display=display.none, tooltip="Zarar Kes Mesafesi: 0.18 = R:R 1:1 (TP ile esit mesafe).")
+showSmartSL = input.bool(false, "Entry/TP/SL Cizgilerini Goster", group=grpRisk, tooltip="Pattern'ler icin Entry, Take Profit ve Stop Loss cizgilerini gosterir/gizler.")
+smartRiskMode = "Aktif"
+smartATRPeriod = 14
+smartATRBase = 2.0
+smartTPRatio = 0.50
+grpAnalytic = ">> ANALITIK"
+smcShowZones = input.bool(true, "FVG Bolgelerini Goster", inline="fvg1", group=grpAnalytic, display=display.none, tooltip="Fiyat bosluklarini (Fair Value Gap) ve bunlarin kirilim bolgelerini (inversion) gosterir.")
+smcMaxFVGInput = input.int(30, "Maksimum Bolge Sayisi", inline="fvg1", minval=1, maxval=100, group=grpAnalytic, display=display.none, tooltip="Grafikte tutulacak maksimum FVG/iFVG kutusu sayisi. (Orn: 30)")
+fvgColorBullishInput = input.color(color.new(#00BCD4, 40), "Bullish FVG", inline="fvg_col1", group=grpAnalytic, tooltip="Bullish FVG kutu rengi")
+fvgColorBearishInput = input.color(color.new(#E91E63, 40), "Bearish FVG", inline="fvg_col1", group=grpAnalytic, tooltip="Bearish FVG kutu rengi")
+ifvgColorBullishInput = input.color(color.new(#00BCD4, 50), "iFVG Bull", inline="fvg_col2", group=grpAnalytic, tooltip="Bullish iFVG (Inverted FVG) kutu rengi")
+ifvgColorBearishInput = input.color(color.new(#E91E63, 50), "iFVG Bear", inline="fvg_col2", group=grpAnalytic, tooltip="Bearish iFVG (Inverted FVG) kutu rengi")
+qualityFilterMode = "A+, A ve B"
+useRVolFilter = true
+rvolThresholdInput = 1.0
+useSMCFilter = true
+smcFilterMode = "Bonus"
+smcMaxFVG = smcMaxFVGInput
+smcMinFVGSize = 0.0
+grpSR = ">> ANALITIK"
+showSRZones = input.bool(true, "S/R Zone'lari Goster", group=grpSR, display=display.none, tooltip="En cok test edilen fraktal destek/direnc zone'larini gosterir. Taze degil, saglamlasmis zone'lar!")
+colSRSupport = input.color(color.new(#26A69A, 70), "Destek Rengi", inline="srCol", group=grpSR, display=display.none)
+colSRResistance = input.color(color.new(#EF5350, 70), "Direnc Rengi", inline="srCol", group=grpSR, display=display.none)
+srMaxZones = input.int(5, "Max Zone Sayisi", minval=2, maxval=50, group=grpSR, display=display.none, tooltip="Gosterilecek maksimum zone sayisi. Zone'lar test sayisina gore siralanir.")
+srMinTouches = input.int(2, "Min Test Sayisi", minval=1, maxval=10, group=grpSR, display=display.none, tooltip="Zone'un gosterilmesi icin minimum kac kez test edilmesi gerektigi. 2+ = Sadece saglamlasmis zone'lar.")
+grpVisual = ">> GORSEL VE UYARILAR"
+useLogScale = input.bool(false, "Logaritmik Olcek", group=grpVisual, display=display.none, tooltip="Logaritmik Olcek: Cizimlerin logaritmik grafik uyumunu saglar. Kripto ve hisse gibi buyuk fiyat hareketlerinde daha dogru gorsel.")
+lineW = input.int(1, "Cizgi Kalinligi", minval=1, maxval=4, group=grpVisual, display=display.none, tooltip="Cizgi Kalinligi: Pattern cizgilerinin piksel kalinligi (1-4 px). Yuksek deger = daha belirgin cizimler.")
+smartExtendBars = input.int(15, "SL/TP Uzunlugu", minval=5, maxval=50, group=grpVisual, display=display.none, tooltip="SL/TP Uzunlugu: Stop Loss ve Take Profit cizgilerinin saga kac bar uzanacagi.")
+useAlerts = input.bool(false, "Alarm Kur", inline="A", group=grpVisual, display=display.none, tooltip="Filtrelerden gecen tum gecerli sinyaller icin anlik bildirim ve sesli uyari gonderir.")
+showRatios = true
+showTable = true
+tablePosition = "Sol Alt"
+alertDirection = "Hepsi"
+alertSound = true
+alertMinQuality = "Hepsi"
+colSmartEntry = #00E676
+colSmartTP = #2196F3
+colSmartSL = #FF5252
+slBufferGartley = 0.75, slBufferBat = 0.75, slBufferButterfly = 1.25
+slBufferCypher = 1.0, slBufferShark = 1.5, slBufferABCD = 1.0
+tpMultGartley = 0.618, tpMultBat = 0.618, tpMultButterfly = 1.0
+tpMultShark = 1.272, tpMultCypher = 0.786, tpMultABCD = 1.0
+abcd_errorPct_on = true, abcd_ratio_on = true
+abcd_alt_127_on = true, abcd_alt_1618_on = true
+abcd_c_min_on = true, abcd_c_max_on = true
+abcd_errorPct = 0.12
+abcd_ratio = 1.0
+abcd_alt_127 = 1.27
+abcd_alt_1618 = 1.618
+abcd_c_min = 0.382
+abcd_c_max = 0.886
+tfMinutes = nz(timeframe.in_seconds() / 60, 60)
+tfMode = tfMinutes <= 15 ? "SCALP" : (tfMinutes <= 60 ? "INTRADAY" : (tfMinutes <= 240 ? "SWING_LIGHT" : "SWING_HEAVY"))
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â• v6 AUTO-PILOT PARAMETERS (OPTIMIZED) â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+type AutoParams
+    int emaFast
+    int emaSlow
+    float rVol
+    float tp1
+    float tp2
+    float slAtr
+    int rsiOB
+    int rsiOS
+    int atrPeriod
+    float atrMult
+    float errorPct
+    string quality
+// Timeframe-specific parameter sets (consolidated from 48 lines to 4)
+var AutoParams SCALP  = AutoParams.new(20, 50, 0.80, 0.382, 0.618, 2.0, 75, 25, 10, 1.0, 0.10, "Hepsi")
+var AutoParams INTRA  = AutoParams.new(50, 200, 0.90, 0.382, 0.618, 2.0, 70, 30, 14, 1.5, 0.08, "Hepsi")
+var AutoParams SWINGL = AutoParams.new(100, 200, 1.20, 0.50, 0.618, 1.8, 68, 32, 18, 1.8, 0.06, "A+, A ve B")
+var AutoParams SWINGH = AutoParams.new(100, 200, 1.30, 0.50, 0.786, 2.0, 65, 35, 21, 2.0, 0.06, "A+ ve A")
+// Get active params based on timeframe
+AutoParams activeParams = tfMinutes <= 15 ? SCALP : (tfMinutes <= 60 ? INTRA : (tfMinutes <= 240 ? SWINGL : SWINGH))
+// Extract values (maintains backward compatibility)
+int autoEMAFast = activeParams.emaFast
+int autoEMASlow = activeParams.emaSlow
+float autoRVolBase = activeParams.rVol
+float autoTP1Base = activeParams.tp1
+float autoTP2Base = activeParams.tp2
+float autoSLATRBase = activeParams.slAtr
+int autoRSIOBBase = activeParams.rsiOB
+int autoRSIOSBase = activeParams.rsiOS
+int autoATRPeriodBase = activeParams.atrPeriod
+float autoATRMultBase = activeParams.atrMult
+float autoErrorPctBase = activeParams.errorPct
+string autoQualityBase = activeParams.quality
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â• END v6 AUTO-PILOT â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+float zigComplexityFactor = 1.5 - (masterComplexity / 100.0) * 0.9
+int autoZigBase = switch timeframe.period
+    "1"   => 24
+    "5"   => 18
+    "15"  => 14
+    "30"  => 12
+    "60"  => 10
+    "240" => 8
+    "D"   => 6
+    "W"   => 5
+    => 12
+int autoZig1Base = int(math.max(3, math.round(autoZigBase * 1.0 * zigComplexityFactor)))
+int autoZig2Base = int(math.max(5, math.round(autoZigBase * 1.5 * zigComplexityFactor)))
+int autoZig3Base = int(math.max(8, math.round(autoZigBase * 2.5 * zigComplexityFactor)))
+int autoZig4Base = int(math.max(13, math.round(autoZigBase * 4.0 * zigComplexityFactor)))
+float complexityFactor = 1.5 - (masterComplexity / 100.0)
+float scaledRVol = nz(autoRVolBase, 1.0) * complexityFactor
+float finalAutoRVol = nz(math.max(0.3, math.min(2.5, scaledRVol)), 1.0)
+grpPrecision = ">> TEMEL AYARLAR"
+useTrendFilter = input.bool(true, "", inline="ema1", group=grpPrecision, display=display.none, tooltip="Â Â Oto-Pilot aktifken bu ayar YOKSAYILIR! Manuel modda: EMA trend filtresi aktiflestirir.")
+ema50Len = input.int(50, "EMA Trend/Hizli", inline="ema1", minval=10, maxval=100, group=grpPrecision, display=display.none)
+ema200Len = input.int(200, "Yavas", inline="ema1", minval=50, maxval=300, group=grpPrecision, display=display.none)
+rvolThreshold = rvolThresholdInput
+rvolPeriod = 20
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â• EMA LENGTHS (simple int required) â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+// Note: ta.ema() requires simple int, UDT fields produce series int - using direct values
+simple int autoEMAFast_s = tfMinutes <= 15 ? 20 : (tfMinutes <= 60 ? 50 : 100)
+simple int autoEMASlow_s = tfMinutes <= 15 ? 50 : 200
+int emaFastFinal = useAutoPilot ? autoEMAFast_s : ema50Len
+int emaSlowFinal = useAutoPilot ? autoEMASlow_s : ema200Len
+float rvolThresholdFinal = useAutoPilot ? float(finalAutoRVol) : float(rvolThreshold)
+float rsiOBFinal = useAutoPilot ? float(autoRSIOBBase) : float(rsiOB)
+float rsiOSFinal = useAutoPilot ? float(autoRSIOSBase) : float(rsiOS)
+int atrPeriodFinal = useAutoPilot ? (tfMinutes <= 15 ? 10 : (tfMinutes <= 60 ? 14 : (tfMinutes <= 240 ? 18 : 21))) : atrPeriod
+float atrMultiplierFinal = useAutoPilot ? float(autoATRMultBase) : float(atrMultiplier)
+int zigLen1Final = useAutoPilot ? int(autoZig1Base) : int(zigLen1)
+int zigLen2Final = useAutoPilot ? int(autoZig2Base) : int(zigLen2)
+int zigLen3Final = useAutoPilot ? int(autoZig3Base) : int(zigLen3)
+int zigLen4Final = useAutoPilot ? int(autoZig4Base) : int(zigLen4)
+float globalErrorPctFinal = useAutoPilot ? float(autoErrorPctBase) : float(globalErrorPct)
+float strictErrorPct = globalErrorPctFinal * 1.0 // 0.7'den 1.0'a cekilerek esnetildi
+string statsQualityFilterFinal = useAutoPilot ? autoQualityBase : statsQualityFilter
+bool filterTrendActive = useAutoPilot ? true : useTrendFilter
+bool filterRVolActive = useAutoPilot ? true : useRVolFilter
+bool filterRSIActive = useAutoPilot ? true : useRSIConfluence
+bool filterSmartRiskActive = smartRiskMode == "Aktif"
+bool filterATRActive = useAutoPilot ? true : useATRFilter
+// FIX: Explicit type declarations for v6 compatibility
+float ema50 = ta.ema(close, emaFastFinal)
+float ema200 = ta.ema(close, emaSlowFinal)
+float volSMA = ta.sma(volume, rvolPeriod)
+// FIX: Explicit zero/na check to prevent division by zero
+float rvolValue = volSMA > 0 and not na(volSMA) ? nz(volume / volSMA, 1.0) : 1.0
+float atrValue = ta.atr(atrPeriodFinal)
+float atrSmartRisk = ta.atr(smartATRPeriod)
+float atrSmartSMA = ta.sma(atrSmartRisk, 50)
+int volRegime = atrSmartRisk > atrSmartSMA ? 1 : -1
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â• RSI CALCULATION (Must be BEFORE functions that use it) â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+// FIX: Moved RSI calculation BEFORE any function that references rsiValue
+// This resolves "Undeclared identifier" error in Pine Script v6
+float rsiValue = ta.rsi(close, rsiLength)
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â• PIVOT CACHE UPDATE (Per-Bar - Global Scope) â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+// Update pivot cache once per bar for S/R confluence detection
+// NOTE: Must be in global scope because Pine v6 can't modify global vars in functions
+float _pivotHigh = ta.pivothigh(high, 10, 10)
+float _pivotLow = ta.pivotlow(low, 10, 10)
+if not na(_pivotHigh)
+    if array.size(cachedPivotHighs) >= 50
+        array.pop(cachedPivotHighs)
+        array.pop(cachedPivotHighBars)
+    array.unshift(cachedPivotHighs, _pivotHigh)
+    array.unshift(cachedPivotHighBars, bar_index - 10)
+if not na(_pivotLow)
+    if array.size(cachedPivotLows) >= 50
+        array.pop(cachedPivotLows)
+        array.pop(cachedPivotLowBars)
+    array.unshift(cachedPivotLows, _pivotLow)
+    array.unshift(cachedPivotLowBars, bar_index - 10)
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+// FAIL-SAFE PROTOCOLS - Black Swan, Data Validation, Signal Mutex
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+// 17. BLACK SWAN DETECTION - Graceful Degradation
+// OPTIMIZED: Use global atrValue and volSMA instead of recalculating
+f_isBlackSwan() =>
+    float priceMove = math.abs(close - nz(close[1], close))
+    float volumeSpike = volSMA > 0 ? nz(volume / volSMA, 1.0) : 1.0
+    bool extremeMove = atrValue > 0 and priceMove > atrValue * BLACK_SWAN_ATR_MULT
+    bool volumeAnomaly = volumeSpike > BLACK_SWAN_VOL_MULT
+    bool gapDetected = atrValue > 0 and math.abs(open - nz(close[1], open)) > atrValue * GAP_ATR_MULT
+    bool dataAnomaly = na(close) or na(open) or close <= 0 or open <= 0
+    extremeMove or volumeAnomaly or gapDetected or dataAnomaly
+// 18. DATA VALIDATION - Noise Immunity
+// Validates bar data integrity before processing
+f_isValidBar() =>
+    bool hasPrice = not na(close) and not na(open) and not na(high) and not na(low)
+    bool hasVolume = not na(volume)
+    bool priceLogical = high >= low and high >= math.max(open, close) and low <= math.min(open, close)
+    bool pricePositive = close > 0 and open > 0 and high > 0 and low > 0
+    hasPrice and hasVolume and priceLogical and pricePositive
+// Noise filter: Reject insignificant moves
+f_isSignificantMove(float priceA, float priceB) =>
+    if na(priceA) or na(priceB) or priceA <= 0 or priceB <= 0
+        false
+    else
+        float minMove = nz(ta.atr(14), 0) * MIN_MOVE_ATR_MULT
+        math.abs(priceA - priceB) > minMove
+// 20. SIGNAL SAFETY CHECK - Stateless (v6 compliant)
+// Uses only per-bar checks without requiring global state updates
+f_canEmitSignal(bool isBullish) =>
+    // Rule 1: Don't signal during black swan events
+    bool marketOk = not f_isBlackSwan()
+    // Rule 2: Valid bar data required
+    bool dataOk = f_isValidBar()
+    // Rule 3: Prevent signals on first few bars (insufficient data)
+    bool hasHistory = bar_index > MIN_HISTORY_BARS
+    // Rule 4: Volume must be present
+    bool hasVolume = not na(volume) and volume > 0
+    marketOk and dataOk and hasHistory and hasVolume
+// Safe division with zero protection
+f_safeDiv(float num, float denom) =>
+    denom == 0 or na(denom) ? 0.0 : num / denom
+// Safe ratio calculation with bounds
+f_safeRatio(float a, float b, float minVal, float maxVal) =>
+    float raw = f_safeDiv(a, b)
+    math.max(minVal, math.min(maxVal, nz(raw, 0)))
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+// END FAIL-SAFE PROTOCOLS
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+f_getBcProjection(float cRatio) =>
+    float bcProj = 1.618
+    if cRatio <= 0.42
+        bcProj := 2.24
+    else if cRatio <= 0.55
+        bcProj := 2.0
+    else if cRatio <= 0.66
+        bcProj := 1.618
+    else if cRatio <= 0.75
+        bcProj := 1.414
+    else if cRatio <= 0.83
+        bcProj := 1.272
+    else
+        bcProj := 1.13
+    bcProj
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+// âš ï¸ REPAINTING UYARISI: ZigZag pivot'larÄ± bar kapanÄ±ÅŸÄ±nda sabitlenir
+// barstate.isconfirmed kontrolÃ¼ ile repainting Ã¶nlendi
+// GerÃ§ek zamanlÄ± bar'da pivot deÄŸerleri deÄŸiÅŸebilir, kapanÄ±ÅŸta sabitlenir
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+f_updateZigZag(array<float> zP, array<int> zB, array<int> zD, int zigLen, int currentDir) =>
+    int newDir = currentDir  // Declare first, then conditionally update
+    // KORUYUCU: Pivot'larÄ± sadece bar kapandÄ±ÄŸÄ±nda gÃ¼ncelle - REPAINTING Ã–NLEME
+    if barstate.isconfirmed
+        float ph = ta.pivothigh(high, zigLen, zigLen)
+        float pl = ta.pivotlow(low, zigLen, zigLen)
+        int pivotBar = bar_index - zigLen
+        bool hasHi = not na(ph)
+        bool hasLo = not na(pl)
+        if hasHi and hasLo
+            if currentDir != 1
+                hasLo := false
+            else
+                hasHi := false
+        if hasHi
+            if currentDir != 1
+                array.unshift(zP, ph)
+                array.unshift(zB, pivotBar)
+                array.unshift(zD, 1)
+                newDir := 1
+            else if array.size(zP) >= 1 and ph > array.get(zP, 0)
+                array.set(zP, 0, ph)
+                array.set(zB, 0, pivotBar)
+        if hasLo
+            if currentDir != -1
+                array.unshift(zP, pl)
+                array.unshift(zB, pivotBar)
+                array.unshift(zD, -1)
+                newDir := -1
+            else if array.size(zP) >= 1 and pl < array.get(zP, 0)
+                array.set(zP, 0, pl)
+                array.set(zB, 0, pivotBar)
+        if array.size(zP) > 200
+            array.pop(zP)
+            array.pop(zB)
+            array.pop(zD)
+    newDir
+// OPTIMIZED: Inline color lookup - no function overhead
+f_getPatternColorInline(string pat) =>
+    switch pat
+        "Gartley" => colGartley
+        "Bat" => colBat
+        "Butterfly" => colButterfly
+        "Shark" => colShark
+        "Cypher" => colCypher
+        => str.contains(pat, "AB=CD") ? colAbcd : color.gray
+f_filter_stats(string patType, string quality, bool isHighWRPattern) =>
+    // A+, A ve B kaliteli pattern'ler istatistige dahil
+    bool eligible = quality == "A+" or quality == "A" or quality == "B"
+    eligible
+PatternConfig[] PATTERNS = array.new<PatternConfig>()
+array.push(PATTERNS, PatternConfig.new("Gartley",   gartley_xab_min, gartley_xab_max, gartley_abc_min, gartley_abc_max, gartley_xad, gartley_prz_bc, gartley_prz_abcd, gartley_prz_ba, false, false))
+array.push(PATTERNS, PatternConfig.new("Bat",       bat_xab_min, bat_xab_max, bat_abc_min, bat_abc_max, bat_xad, bat_prz_bc, bat_prz_abcd, bat_prz_ba, false, false))
+array.push(PATTERNS, PatternConfig.new("Butterfly", butterfly_xab_min, butterfly_xab_max, butterfly_abc_min, butterfly_abc_max, butterfly_xad, butterfly_prz_bc, butterfly_prz_abcd, butterfly_prz_ba, false, false))
+array.push(PATTERNS, PatternConfig.new("Shark",     shark_xab_min, shark_xab_max, shark_abc_min, shark_abc_max, shark_xad_min, shark_prz_bc, shark_prz_abcd, shark_prz_ba, true, false))
+array.push(PATTERNS, PatternConfig.new("Cypher",    cypher_xab_min, cypher_xab_max, cypher_xac_min, cypher_xac_max, cypher_xcd, cypher_prz_bc, cypher_prz_abcd, cypher_prz_ba, true, true))
+f_scanPatterns(float xab, float abc, float xac, float errPct, bool cBelowA, bool cBeyondA, bool[] enabledPatterns) =>
+    string foundPat = ""
+    float przXA = na, float przBC = na, float przABCD = na, float przBA = na
+    for i = 0 to array.size(PATTERNS) - 1
+        if foundPat != ""
+            break
+        PatternConfig p = array.get(PATTERNS, i)
+        bool isEnabled = array.size(enabledPatterns) > i ? array.get(enabledPatterns, i) : false
+        if not isEnabled
+            continue
+        bool cPosOk = p.cBeyondA ? cBeyondA : cBelowA
+        if not cPosOk
+            continue
+        bool xab_ok = xab >= p.xab_min * (1 - errPct) and xab <= p.xab_max * (1 + errPct)
+        float cRatio = p.usesXAC ? xac : abc
+        bool abc_ok = cRatio >= p.abc_min * (1 - errPct) and cRatio <= p.abc_max * (1 + errPct)
+        if xab_ok and abc_ok
+            foundPat := p.name
+            przXA := p.xad
+            przBC := p.prz_bc
+            przABCD := p.prz_abcd
+            przBA := p.prz_ba
+    [foundPat, przXA, przBC, przABCD, przBA]
+f_calcQualityScore(float przTop, float przBot, float refPrice) =>
+    string quality = "C"
+    if not na(przTop) and not na(przBot) and refPrice > 0
+        float przWidth = math.abs(przTop - przBot)
+        float przPct = (przWidth / refPrice) * 100
+        if przPct <= 0.5
+            quality := "A+"
+        else if przPct <= 1.0
+            quality := "A"
+        else if przPct <= 2.0
+            quality := "B"
+        else
+            quality := "C"
+    quality
+f_calcConfluenceScore(float targetPrice, bool isBullish) =>
+    int confluenceScore = 0
+    float proximityPct = 0.005
+    if na(targetPrice) or targetPrice <= 0
+        confluenceScore := 0
+    else
+        float ema50Val = nz(ema50, close)
+        float ema200Val = nz(ema200, close)
+        float ema50Dist = math.abs(targetPrice - ema50Val) / targetPrice
+        float ema200Dist = math.abs(targetPrice - ema200Val) / targetPrice
+        // EMA yakinlik bonusu
+        if ema50Dist <= proximityPct
+            confluenceScore += 25
+        else if ema50Dist <= proximityPct * 2
+            confluenceScore += 15
+        if ema200Dist <= proximityPct
+            confluenceScore += 30
+        else if ema200Dist <= proximityPct * 2
+            confluenceScore += 20
+        // Round number proximity
+        float roundCheck = targetPrice >= 10000 ? 1000 : (targetPrice >= 1000 ? 100 : (targetPrice >= 100 ? 10 : 1))
+        float nearestRound = math.round(targetPrice / roundCheck) * roundCheck
+        float roundDist = math.abs(targetPrice - nearestRound) / targetPrice
+        if roundDist <= 0.002
+            confluenceScore += 15
+        else if roundDist <= 0.005
+            confluenceScore += 8
+        // TREND ALIGNMENT - En onemli faktor
+        bool trendAligned = isBullish ? (ema50Val > ema200Val) : (ema50Val < ema200Val)
+        bool priceInTrend = isBullish ? (targetPrice > ema200Val) : (targetPrice < ema200Val)
+        if trendAligned and priceInTrend
+            confluenceScore += 35  // Trend yonunde pattern - en guvenilir
+        else if trendAligned
+            confluenceScore += 15  // Trend dogru ama fiyat henuz degil
+        else
+            confluenceScore -= 20  // Counter-trend - riskli
+        // RSI extreme zone kontrolu - OPTIMIZED: Use global rsiValue instead of recalculating
+        bool rsiExtreme = isBullish ? (rsiValue <= 35) : (rsiValue >= 65)
+        if rsiExtreme
+            confluenceScore += 20
+        if useSMCFilter and smcFilterMode != "Kapali"
+            confluenceScore += 0
+    confluenceScore := math.max(0, math.min(100, confluenceScore))
+    confluenceScore
+// NOTE: rsiValue is now declared earlier (line 418) to avoid scope issues
+f_getRSIStatus(bool isBullish, int Dbar) =>
+    string status = ""
+    string symbol = ""
+    float rsiAtD = rsiValue[bar_index - Dbar]
+    if not na(rsiAtD)
+        if isBullish
+            if rsiAtD <= rsiOSFinal
+                status := str.tostring(rsiAtD, "#.#")
+                symbol := " ÃƒÂ¢Ã…â€œÃ¢â‚¬Å“"
+            else
+                status := str.tostring(rsiAtD, "#.#")
+                symbol := " ÃƒÂ¢Ã…â€œÃ¢â‚¬â€"
+        else
+            if rsiAtD >= rsiOBFinal
+                status := str.tostring(rsiAtD, "#.#")
+                symbol := " ÃƒÂ¢Ã…â€œÃ¢â‚¬Å“"
+            else
+                status := str.tostring(rsiAtD, "#.#")
+                symbol := " ÃƒÂ¢Ã…â€œÃ¢â‚¬â€"
+    [status, symbol, rsiAtD]
+f_checkRSIDivergence(bool isBullish, float X, float D, int Xbar, int Dbar) =>
+    bool hasDivergence = false
+    if not na(X) and not na(D) and Xbar > 0 and Dbar > 0 and Dbar > Xbar
+        float rsiAtX = rsiValue[bar_index - Xbar]
+        float rsiAtD = rsiValue[bar_index - Dbar]
+        if not na(rsiAtX) and not na(rsiAtD)
+            if isBullish
+                bool priceLowerLow = D < X
+                bool rsiHigherLow = rsiAtD > rsiAtX
+                hasDivergence := priceLowerLow and rsiHigherLow
+            else
+                bool priceHigherHigh = D > X
+                bool rsiLowerHigh = rsiAtD < rsiAtX
+                hasDivergence := priceHigherHigh and rsiLowerHigh
+    hasDivergence
+f_checkMomentumConfirmation(bool isBullish, int Dbar) =>
+    bool confirmed = false
+    int barsSinceD = bar_index - Dbar
+    if barsSinceD >= 0 and barsSinceD < 5
+        for i = 0 to barsSinceD
+            if isBullish
+                if close[i] > open[i] and close[i] > high[i+1]
+                    confirmed := true
+                    break
+            else
+                if close[i] < open[i] and close[i] < low[i+1]
+                    confirmed := true
+                    break
+    confirmed
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+// GELIÅMIÅ MOMENTUM FONKSIYONLARI
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+// ADX Trend Strength Filter - ADX > 20 trend guclu demektir
+// OPTIMIZED: Reduce redundant ATR calculation
+f_checkADXStrength(int Dbar) =>
+    bool strongTrend = false
+    if i_useADXFilter and Dbar > 0 and Dbar < 500
+        int lookback = bar_index - Dbar
+        if lookback >= 0
+            // ADX manuel hesapla (ta.adx fonksiyonu Pine Script'te yok)
+            int len = 14
+            float tr = math.max(high - low, math.abs(high - close[1]), math.abs(low - close[1]))
+            float plusDM = high > high[1] ? math.max(high - high[1], 0) : 0
+            float minusDM = low < low[1] ? math.max(low[1] - low, 0) : 0
+            // OPTIMIZED: Use global atrValue instead of ta.atr(len)
+            float atr = atrValue
+            float smoothPlus = ta.sma(plusDM, len)
+            float smoothMinus = ta.sma(minusDM, len)
+            // DX calculation
+            float dx = smoothPlus + smoothMinus > 0 ? math.abs(smoothPlus - smoothMinus) / (smoothPlus + smoothMinus) * 100 : 0
+            float adxValue = ta.sma(dx, len)
+            strongTrend := not na(adxValue) and adxValue >= i_adxThreshold
+    else
+        strongTrend := true  // Filtre kapaliysa true dondur
+    strongTrend
+// Bollinger Band Squeeze + Expansion Filter
+f_checkBBSqueeze(int Dbar, bool isBullish) =>
+    bool bbConfirm = false
+    if i_useBBFilter and Dbar > 0 and Dbar < 500
+        int lookback = bar_index - Dbar
+        if lookback >= 0 and lookback < 100
+            // Mevcut bar'da BB hesapla
+            float basis = ta.sma(close, i_bbLength)
+            float dev = ta.stdev(close, i_bbLength)
+            float upper = basis + dev * i_bbMult
+            float lower = basis - dev * i_bbMult
+            float bbWidth = (upper - lower) / basis * 100
+            // 5 bar onceki BB width'i al - KORUYUCU: Check history exists
+            float basisPrev = bar_index >= 5 + i_bbLength ? ta.sma(close[5], i_bbLength) : basis
+            float devPrev = bar_index >= 5 + i_bbLength ? ta.stdev(close[5], i_bbLength) : dev
+            float bbWidthPrev = ((basisPrev + devPrev * i_bbMult) - (basisPrev - devPrev * i_bbMult)) / basisPrev * 100
+            bool wasSqueeze = bbWidthPrev < bbWidth * 0.7
+            bool isExpanding = bbWidth > bbWidthPrev * 1.1
+            bbConfirm := wasSqueeze or isExpanding
+    else
+        bbConfirm := true  // Filtre kapaliysa true dondur
+    bbConfirm
+// Stochastic %K/%D Cross Filter
+f_checkStochasticCross(int Dbar, bool isBullish) =>
+    bool stochConfirm = false
+    if i_useStochFilter and Dbar > 0 and Dbar < 500
+        int lookback = bar_index - Dbar
+        if lookback >= 0 and lookback < i_stochK
+            // Mevcut bar'da Stochastic hesapla
+            float k = ta.sma((close - ta.lowest(low, i_stochK)) / (ta.highest(high, i_stochK) - ta.lowest(low, i_stochK)) * 100, 3)
+            float d = ta.sma(k, i_stochD)
+            // Onceki bar degerlerini al - KORUYUCU: Check history exists
+            float kPrev = bar_index > 0 ? ta.sma((close[1] - ta.lowest(low[1], i_stochK)) / (ta.highest(high[1], i_stochK) - ta.lowest(low[1], i_stochK)) * 100, 3) : k
+            float dPrev = ta.sma(kPrev, i_stochD)
+            // Bullish: %K crosses %D upward from oversold
+            if isBullish
+                stochConfirm := kPrev <= dPrev and k > d and k < 80
+            else
+                // Bearish: %K crosses %D downward from overbought
+                stochConfirm := kPrev >= dPrev and k < d and k > 20
+    else
+        stochConfirm := true  // Filtre kapaliysa true dondur
+    stochConfirm
+// MACD Histogram Momentum Shift Filter
+f_checkMACDMomentum(int Dbar, bool isBullish) =>
+    bool macdConfirm = false
+    if i_useMACDFilter and Dbar > 0 and Dbar < 500
+        int lookback = bar_index - Dbar
+        if lookback >= 0 and lookback < 100
+            // Mevcut bar'da MACD hesapla
+            float macdLine = ta.ema(close, i_macdFast) - ta.ema(close, i_macdSlow)
+            float signalLine = ta.ema(macdLine, i_macdSignal)
+            float hist = macdLine - signalLine
+            // Onceki bar histogram degerini al - KORUYUCU: Check history exists
+            float macdLinePrev = bar_index > 0 ? ta.ema(close[1], i_macdFast) - ta.ema(close[1], i_macdSlow) : macdLine
+            float signalLinePrev = ta.ema(macdLinePrev, i_macdSignal)
+            float histPrev = macdLinePrev - signalLinePrev
+            // Bullish: Histogram turns positive (increasing momentum)
+            if isBullish
+                macdConfirm := histPrev <= 0 and hist > 0
+            else
+                // Bearish: Histogram turns negative (decreasing momentum)
+                macdConfirm := histPrev >= 0 and hist < 0
+    else
+        macdConfirm := true  // Filtre kapaliysa true dondur
+    macdConfirm
+// AB=CD Time Symmetry Filter
+f_checkABCDTimeSymmetry(int Abar, int Bbar, int Cbar, int Dbar) =>
+    bool timeSym = false
+    if i_useABCDTimeSym and Abar > 0 and Bbar > 0 and Cbar > 0 and Dbar > 0
+        int abBars = math.abs(Bbar - Abar)
+        int cdBars = math.abs(Dbar - Cbar)
+        if abBars > 0
+            float ratio = cdBars / float(abBars)
+            // Time symmetry: %20 tolerans ile 1.0 ratio
+            timeSym := ratio >= 0.8 and ratio <= 1.2
+    else
+        timeSym := true  // Filtre kapaliysa true dondur
+    timeSym
+f_shouldAlert(quality) =>
+    alertMinQuality == "Hepsi" ? true : alertMinQuality == "C+" ? true : alertMinQuality == "B+" ? (quality == "A+" or quality == "A" or quality == "B") : alertMinQuality == "A+" ? (quality == "A+" or quality == "A") : alertMinQuality == "Sadece A+" ? (quality == "A+") : true
+f_getOptimalXAB(string patternType) =>
+    switch patternType
+        "Gartley" => 0.618
+        "Bat" => 0.500
+        "Butterfly" => 0.786
+        "Shark" => 0.618
+        "Cypher" => 0.618
+        => 0.618
+f_getPatternPenalty(string patternType) =>
+    switch patternType
+        "Cypher" => 0
+        "Bat" => 0
+        "Gartley" => 5
+        "Shark" => 15
+        "Butterfly" => 20
+        => 10
+f_getPatternReliability(string patternType) =>
+    switch patternType
+        "Bat" => 0.85
+        "Cypher" => 0.80
+        "Gartley" => 0.65
+        "Shark" => 0.55
+        "Butterfly" => 0.45
+        => 0.50
+f_applyReliabilityToScore(float baseScore, string patternType) =>
+    float reliability = f_getPatternReliability(patternType)
+    float adjustedScore = baseScore * reliability
+    math.min(100, math.max(0, adjustedScore))
+f_calcRatioProximityScore(string patternType, float xabRatio, float abcRatio) =>
+    float score = 0.0
+    float optXAB = 0.0
+    float optABC = 0.0
+    if patternType == "Gartley"
+        optXAB := 0.618
+        optABC := 0.618
+    else if patternType == "Bat"
+        optXAB := 0.500
+        optABC := 0.500
+    else if patternType == "Butterfly"
+        optXAB := 0.786
+        optABC := 0.618
+    else if patternType == "Shark"
+        optXAB := 0.618
+        optABC := 1.27
+    else if patternType == "Cypher"
+        optXAB := 0.500
+        optABC := 0.786
+    float xabDist = optXAB > 0 ? math.abs(xabRatio - optXAB) / optXAB : 0
+    float abcDist = optABC > 0 ? math.abs(abcRatio - optABC) / optABC : 0
+    float xabScore = math.max(0, 50 - (xabDist * 200))
+    float abcScore = math.max(0, 50 - (abcDist * 200))
+    score := xabScore + abcScore
+    math.min(100, math.max(0, score))
+f_calcFibConfluenceBonus(float D, float przXA, float przBC, float przABCD, float przBA) =>
+    int bonusPoints = 0
+    float tolerance = 0.005
+    int levelsHit = 0
+    if not na(przXA) and przXA > 0 and D > 0
+        float dist = math.abs(D - przXA) / D
+        if dist <= tolerance
+            levelsHit += 1
+    if not na(przBC) and przBC > 0 and D > 0
+        float dist = math.abs(D - przBC) / D
+        if dist <= tolerance
+            levelsHit += 1
+    if not na(przABCD) and przABCD > 0 and D > 0
+        float dist = math.abs(D - przABCD) / D
+        if dist <= tolerance
+            levelsHit += 1
+    if not na(przBA) and przBA > 0 and D > 0
+        float dist = math.abs(D - przBA) / D
+        if dist <= tolerance
+            levelsHit += 1
+    bonusPoints := levelsHit == 1 ? 5 : (levelsHit == 2 ? 15 : (levelsHit >= 3 ? 30 : 0))
+    bonusPoints
+f_getDynamicMinScore(string patternType, int tfMins) =>
+    int baseScore = 40
+    // Timeframe bazli minimum skor
+    if tfMins <= 15
+        baseScore := 45
+    else if tfMins <= 60
+        baseScore := 42
+    else if tfMins <= 240
+        baseScore := 40
+    else
+        baseScore := 35
+    // Pattern bazli ayarlama
+    if patternType == "Gartley"
+        baseScore := int(baseScore * 0.85)  // Gartley guvenilir
+    else if patternType == "Butterfly"
+        baseScore := int(baseScore * 0.90)  // Butterfly iyi
+    else if patternType == "Shark"
+        baseScore := int(baseScore * 1.30)  // Shark icin cok yuksek esik
+    else if patternType == "Bat"
+        baseScore := int(baseScore * 1.25)  // Bat icin yuksek esik
+    else if patternType == "Cypher"
+        baseScore := int(baseScore * 1.10)  // Cypher icin biraz yuksek
+    baseScore
+f_getZigzagDepth() =>
+    switch timeframe.period
+        "1"   => 24
+        "5"   => 18
+        "15"  => 14
+        "30"  => 12
+        "60"  => 10
+        "240" => 8
+        "D"   => 6
+        "W"   => 5
+        => 12
+// OPTIMIZED: Use global atrValue instead of recalculating
+f_getMinSwingAtr() =>
+    switch timeframe.period
+        "1"   => atrValue * 1.0
+        "5"   => atrValue * 0.75
+        "15"  => atrValue * 0.5
+        "60"  => atrValue * 0.4
+        "240" => atrValue * 0.3
+        => atrValue * 0.5
+f_requiresDivergence(string patternType, int tfMins) =>
+    bool isWeakPattern = patternType == "Butterfly" or patternType == "Cypher" or patternType == "Shark"
+    bool isLowTF = tfMins <= 15
+    (patternType == "Gartley" and isLowTF) or (isWeakPattern and isLowTF)
+f_lorentzianDistance(float actual, float optimal) =>
+    math.log(1 + math.abs(actual - optimal))
+f_calcBPointMLScore(string patternType, float xabRatio, float rsiAtC, float rvolAtC, bool isBullish) =>
+    float optXAB = f_getOptimalXAB(patternType)
+    float optRSI = isBullish ? 30.0 : 70.0
+    float optRVol = 1.5
+    float distXAB = f_lorentzianDistance(xabRatio, optXAB)
+    float distRSI = f_lorentzianDistance(rsiAtC, optRSI) / 10
+    float distRVol = f_lorentzianDistance(rvolAtC, optRVol)
+    float totalDist = (distXAB * 30) + (distRSI * 20) + (distRVol * 15)
+    float penalty = f_getPatternPenalty(patternType)
+    float rawScore = 100 - totalDist - penalty
+    math.max(0, math.min(100, rawScore))
+f_checkTrendAlignment(bool isBullish, float D) =>
+    bool result = true
+    if filterTrendActive
+        // Ana trend kontrolu - EMA50 vs EMA200
+        bool uptrend = ema50 > ema200
+        bool downtrend = ema50 < ema200
+        // Pullback kontrolu - fiyat EMA'ya yakin
+        bool nearEMA = math.abs(D - ema50) / D < 0.02  // %2 yakinlik
+        if isBullish
+            // Bullish: Uptrend'de pullback veya EMA'ya yakin
+            result := uptrend or nearEMA
+        else
+            // Bearish: Downtrend'de pullback veya EMA'ya yakin
+            result := downtrend or nearEMA
+    result
+f_checkRVol(int Dbar) =>
+    bool result = true
+    if filterRVolActive
+        int lookback = bar_index - Dbar
+        if lookback >= 0 and lookback <= 500
+            float rvolAtD = rvolValue[lookback]
+            result := not na(rvolAtD) and rvolAtD >= rvolThresholdFinal
+    result
+f_calcRatio(p1, p2, r1, r2) =>
+    float result = 0.0
+    if useLogScale
+        if r1 > 0 and r2 > 0 and p1 > 0 and p2 > 0
+            float logP1 = math.log(p1)
+            float logP2 = math.log(p2)
+            float logR1 = math.log(r1)
+            float logR2 = math.log(r2)
+            float refDiff = math.abs(logR2 - logR1)
+            if refDiff > 0
+                result := math.abs(logP2 - logP1) / refDiff
+    else
+        float refDiff = math.abs(r2 - r1)
+        if refDiff > 0
+            result := math.abs(p2 - p1) / refDiff
+    result
+f_inRange(float ratio, float minLevel, float maxLevel, float tol) =>
+    ratio >= minLevel * (1 - tol) and ratio < maxLevel * (1 + tol)
+f_getABCDComponent(float abc, float xab) =>
+    string abcdType = ""
+    if abc >= 0.382 and abc <= 0.60
+        abcdType := "1.27"
+    else if abc >= 0.60 and abc <= 0.786
+        abcdType := "AB=CD"
+    else if abc >= 0.786 and abc <= 0.886
+        abcdType := "1.618"
+    abcdType
+f_calcLogDistance(fromPrice, toPrice) =>
+    float distance = 0.0
+    if useLogScale and fromPrice > 0 and toPrice > 0
+        distance := math.log(toPrice) - math.log(fromPrice)
+    else
+        distance := toPrice - fromPrice
+    distance
+f_applyRatio(basePrice, refDistance, ratio) =>
+    float targetPrice = na
+    if useLogScale and basePrice > 0
+        targetPrice := math.exp(math.log(basePrice) + refDistance * ratio)
+    else
+        targetPrice := basePrice + refDistance * ratio
+    targetPrice
+f_calcSmartRisk(string pat, bool isBullish, float X, float A, float C, float D, int Xbar, int Dbar) =>
+    float sl_price = na
+    float tp_price = na
+    float entry_price = D
+    bool validInputs = not na(X) and not na(A) and not na(C) and not na(D) and Xbar > 0 and Dbar > 0
+    if validInputs
+        bool isExtensionPattern = (pat == "Shark" or pat == "Butterfly")
+        float slMult = 1.0
+        if useManualSL
+            slMult := manualSLRatio
+        else
+            slMult := switch pat
+                "Gartley" => slBufferGartley
+                "Bat" => slBufferBat
+                "Butterfly" => slBufferButterfly
+                "Cypher" => slBufferCypher
+                "Shark" => slBufferShark
+                => slBufferABCD
+        float sl_calc = na
+        if isExtensionPattern
+            float cdLen = math.abs(D - C)
+            float slDistance = cdLen * slMult
+            if isBullish
+                sl_calc := D - slDistance
+            else
+                sl_calc := D + slDistance
+        else
+            if useManualSL
+                float cdLen = math.abs(D - C)
+                float slDistance = cdLen * slMult
+                if isBullish
+                    sl_calc := D - slDistance
+                else
+                    sl_calc := D + slDistance
+            else
+                float finalSLGlobalMult = (useManualTP or not useGlobalSLMult) ? 1.0 : slGlobalMultiplier
+                float atrBuffer = atrSmartRisk * slMult * finalSLGlobalMult
+                if isBullish
+                    sl_calc := X - atrBuffer
+                else
+                    sl_calc := X + atrBuffer
+        float CD = math.abs(D - C)
+        // Pattern bazli SL - zayif pattern'ler icin daha genis
+        float slMultNew = switch pat
+            "Gartley" => 0.55
+            "Butterfly" => 0.60
+            "Bat" => 0.85        // Bat icin cok genis SL
+            "Shark" => 0.90      // Shark icin en genis SL
+            "Cypher" => 0.75     // Cypher icin genis SL
+            => 0.60
+        float slDistance = CD * slMultNew
+        float maxATRDistance = atrSmartRisk * 3.5
+        if slDistance > maxATRDistance
+            slDistance := maxATRDistance
+        if isBullish
+            sl_price := D - slDistance
+        else
+            sl_price := D + slDistance
+        // Pattern bazli TP - zayif pattern'ler icin daha yakin hedef
+        float baseTpMult = smartTPRatio
+        baseTpMult := switch pat
+            "Gartley" => 0.382   // Guclu pattern, normal hedef
+            "Butterfly" => 0.35  // Biraz yakin
+            "Bat" => 0.20        // Cok yakin hedef - win rate icin
+            "Shark" => 0.18      // En yakin hedef - win rate icin
+            "Cypher" => 0.28     // Yakin hedef
+            => 0.30
+        float tpMult = volRegime == 1 ? baseTpMult * 1.15 : baseTpMult * 0.95
+        if isBullish
+            tp_price := D + (CD * tpMult)
+        else
+            tp_price := D - (CD * tpMult)
+        float riskDistance = math.abs(D - sl_price)
+        float rewardDistance = math.abs(tp_price - D)
+        float rrRatio = riskDistance > 0 ? rewardDistance / riskDistance : 0
+        // Minimum RR 1.0 - win rate icin optimize
+        if rrRatio < 1.0 and riskDistance > 0
+            float minReward = riskDistance * 1.0
+            if isBullish
+                tp_price := D + minReward
+            else
+                tp_price := D - minReward
+        float safety = syminfo.mintick * 10
+        if isBullish and sl_price >= D
+            sl_price := D - safety
+        else if not isBullish and sl_price <= D
+            sl_price := D + safety
+        entry_price := D
+    [sl_price, tp_price, entry_price]
+f_calcPRZ_Cluster(bool isBullish, float X, float A, float B, float C, float XA_ratio, float BC_ratio, float ABCD_ratio, float BA_ratio) =>
+    float dir = isBullish ? -1.0 : 1.0
+    bool has_xa = not na(XA_ratio) and XA_ratio > 0
+    bool has_bc = not na(BC_ratio) and BC_ratio > 0
+    bool has_abcd = not na(ABCD_ratio) and ABCD_ratio > 0
+    bool has_ba = not na(BA_ratio) and BA_ratio > 0
+    float level_xa = na
+    if has_xa and not na(A) and not na(X)
+        float xaLen = X - A
+        level_xa := A + xaLen * XA_ratio
+    float level_bc = na
+    if has_bc and not na(C) and not na(B)
+        float bcLen = math.abs(C - B)
+        level_bc := C + bcLen * BC_ratio * dir
+    float level_abcd = na
+    if has_abcd and not na(C) and not na(A) and not na(B)
+        float abLen = math.abs(B - A)
+        level_abcd := C + abLen * ABCD_ratio * dir
+    float level_ba = na
+    if has_ba and not na(B) and not na(A)
+        float abLen = math.abs(B - A)
+        level_ba := B + abLen * BA_ratio * dir
+    array<float> validLevels = array.new<float>()
+    if has_bc and not na(level_bc)
+        array.push(validLevels, level_bc)
+    if has_abcd and not na(level_abcd)
+        array.push(validLevels, level_abcd)
+    if has_ba and not na(level_ba)
+        array.push(validLevels, level_ba)
+    float prz_top = array.size(validLevels) > 0 ? array.max(validLevels) : na
+    float prz_bot = array.size(validLevels) > 0 ? array.min(validLevels) : na
+    [level_xa, level_bc, level_abcd, level_ba, prz_top, prz_bot]
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+// KALITE SKORLAMA SISTEMI - ISTATISTIK FILTRELEME ICIN
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+f_getIdealRatio(string patternType, string leg) =>
+    float ideal = na
+    if patternType == "Gartley"
+        ideal := leg == "XAB" ? 0.618 : leg == "ABC" ? 0.618 : leg == "BCD" ? 1.272 : leg == "XAD" ? 0.786 : na
+    else if patternType == "Bat"
+        ideal := leg == "XAB" ? 0.500 : leg == "ABC" ? 0.500 : leg == "BCD" ? 2.0 : leg == "XAD" ? 0.886 : na
+    else if patternType == "Butterfly"
+        ideal := leg == "XAB" ? 0.786 : leg == "ABC" ? 0.618 : leg == "BCD" ? 1.618 : leg == "XAD" ? 1.272 : na
+    else if patternType == "Shark"
+        ideal := leg == "XAB" ? 0.618 : leg == "ABC" ? 1.27 : leg == "BCD" ? 1.618 : leg == "XAD" ? 1.13 : na
+    else if patternType == "Cypher"
+        ideal := leg == "XAB" ? 0.500 : leg == "ABC" ? 0.786 : leg == "BCD" ? 1.272 : leg == "XAD" ? 0.786 : na
+    ideal
+f_calculateFibAccuracy(string pType, float xabR, float abcR, float xadR) =>
+    float totalDeviation = 0.0
+    int legCount = 0
+    float idealXAB = f_getIdealRatio(pType, "XAB")
+    if not na(idealXAB) and idealXAB > 0 and not na(xabR)
+        float dev = math.abs(xabR - idealXAB) / idealXAB * 100
+        totalDeviation += dev
+        legCount += 1
+    float idealABC = f_getIdealRatio(pType, "ABC")
+    if not na(idealABC) and idealABC > 0 and not na(abcR)
+        float dev = math.abs(abcR - idealABC) / idealABC * 100
+        totalDeviation += dev
+        legCount += 1
+    float idealXAD = f_getIdealRatio(pType, "XAD")
+    if not na(idealXAD) and idealXAD > 0 and not na(xadR)
+        float dev = math.abs(xadR - idealXAD) / idealXAD * 100
+        totalDeviation += dev
+        legCount += 1
+    float avgDeviation = legCount > 0 ? totalDeviation / legCount : 100.0
+    int score = avgDeviation < 1.0 ? 20 : avgDeviation < 2.0 ? 15 : avgDeviation < 3.0 ? 10 : 5
+    score
+f_calculateGeometricIntegrity(float X, float B, float C, bool isBullish) =>
+    int score = 0
+    if not na(X) and not na(B) and not na(C)
+        bool violation = isBullish ? (C < X) : (C > X)
+        if not violation
+            score := 20
+        else
+            float xbRange = math.abs(B - X)
+            float violationAmount = isBullish ? math.abs(X - C) : math.abs(C - X)
+            float violationPct = xbRange > 0 ? violationAmount / xbRange * 100 : 100.0
+            score := violationPct < 0.5 ? 10 : violationPct < 2.0 ? 5 : 0
+    score
+// OPTIMIZED: Early exit improvements and loop invariant extraction
+f_calculateSRConfluence(float przLevel, int dBar) =>
+    int score = 0
+    if not na(przLevel) and przLevel > 0
+        // Input validation
+        if dBar <= 0 or dBar >= bar_index
+            score := 0
+        else
+            float minDistance_qs = 999999.0
+            // Use CACHED pivot arrays instead of recalculating (10x faster)
+            // Check pivot highs from cache
+            int phSize = array.size(cachedPivotHighs)
+            if phSize > 0
+                int checkLimit = math.min(phSize, SAFE_LOOKBACK_LIMIT)
+                for i = 0 to checkLimit - 1
+                    float ph = array.get(cachedPivotHighs, i)
+                    int phBar = array.get(cachedPivotHighBars, i)
+                    // Only consider pivots before D point - OPTIMIZED: Check moved to start of loop
+                    if phBar >= dBar or na(ph) or ph <= 0
+                        continue
+                    float dist = math.abs(przLevel - ph) / math.max(przLevel, ph) * 100
+                    if dist < minDistance_qs
+                        minDistance_qs := dist
+                        // Early exit if perfect match found
+                        if dist < 0.3
+                            break
+            // Check pivot lows from cache - OPTIMIZED: Skip if already found perfect match
+            int plSize = array.size(cachedPivotLows)
+            if plSize > 0 and minDistance_qs > 0.3
+                int checkLimit = math.min(plSize, SAFE_LOOKBACK_LIMIT)
+                for i = 0 to checkLimit - 1
+                    float pl = array.get(cachedPivotLows, i)
+                    int plBar = array.get(cachedPivotLowBars, i)
+                    if plBar >= dBar or na(pl) or pl <= 0
+                        continue
+                    float dist = math.abs(przLevel - pl) / math.max(przLevel, pl) * 100
+                    if dist < minDistance_qs
+                        minDistance_qs := dist
+                    if dist < 0.3
+                        break
+            score := minDistance_qs < 0.5 ? 15 : minDistance_qs < 1.0 ? 10 : minDistance_qs < 2.0 ? 5 : 0
+    score
+// OPTIMIZED: Static round levels array created once, reused for all calls
+var array<float> _roundLevels = array.from(100.0, 500.0, 1000.0, 5000.0, 10000.0, 50000.0, 100000.0)
+f_calculateRoundNumberScore(float price) =>
+    int score = 0
+    if not na(price) and price > 0
+        float p = math.abs(price)
+        float minDistPct = 999999.0
+        int roundsSize = array.size(_roundLevels)
+        if roundsSize > 0
+            for i = 0 to roundsSize - 1
+                float roundLevel = array.get(_roundLevels, i)
+                if roundLevel > 0
+                    float dist = math.abs(p - roundLevel) / math.max(p, roundLevel) * 100
+                    minDistPct := math.min(minDistPct, dist)
+                    // OPTIMIZED: Early exit on perfect match
+                    if dist < 0.1
+                        break
+        score := minDistPct < 0.3 ? 10 : minDistPct < 0.7 ? 5 : 0
+    score
+// OPTIMIZED: Use global volSMA instead of recalculating ta.sma()
+f_calculateVolumeScore(int dBar) =>
+    int score = 0
+    int barsBack = bar_index - dBar
+    if barsBack >= 0 and barsBack < 500
+        float volAtD_qs = volume[barsBack]
+        float volSMA_qs = volSMA[barsBack]
+        if not na(volAtD_qs) and not na(volSMA_qs) and volSMA_qs > 0
+            float volumeRatio_qs = volAtD_qs / volSMA_qs
+            if volumeRatio_qs >= 2.0
+                score := 10
+            else if volumeRatio_qs >= 1.5
+                score := 7
+            else if volumeRatio_qs >= 1.0
+                score := 3
+            else if volumeRatio_qs < 0.7
+                score := -3
+    score
+f_calculatePenalties(string pType, int xBar, int dBar, bool isBullish, int tfMins) =>
+    int penalty = 0
+    int patternDuration = math.abs(dBar - xBar)
+    int medianDuration = tfMins <= 5 ? 30 : tfMins <= 15 ? 50 : tfMins <= 60 ? 80 : 120
+    if patternDuration > medianDuration * 2
+        penalty -= 10
+    else if patternDuration < medianDuration * 0.3
+        penalty -= 5
+    if i_useTrendPenalty
+        int barsBack_qs = bar_index - dBar
+        if barsBack_qs >= 0 and barsBack_qs < 500
+            // OPTIMIZED: Use global ema50 instead of recalculating ta.ema()
+            float ema50AtD_qs = ema50[barsBack_qs]
+            float closeAtD_qs = close[barsBack_qs]
+            if not na(ema50AtD_qs) and not na(closeAtD_qs)
+                bool bullPattern_qs = isBullish
+                bool priceAboveEMA_qs = closeAtD_qs > ema50AtD_qs
+                if (bullPattern_qs and not priceAboveEMA_qs) or (not bullPattern_qs and priceAboveEMA_qs)
+                    penalty -= 5
+    penalty
+calculateQualityScore(string patType, float X, float A, float B, float C, float D, int xBar, int aBar, int bBar, int cBar, int dBar, bool isBullish) =>
+    float score = 0.0
+    float xabRatio = f_calcRatio(A, B, X, A)
+    float abcRatio = f_calcRatio(B, C, A, B)
+    float xadRatio = f_calcRatio(X, D, X, A)
+    score += nz(f_calculateFibAccuracy(patType, xabRatio, abcRatio, xadRatio), 0)
+    score += nz(f_calculateGeometricIntegrity(X, B, C, isBullish), 0)
+    // Confluence bonusu - EMA, S/R ve round number kontrolleri
+    if i_useSRConfluence
+        score += nz(f_calculateSRConfluence(D, dBar), 0)
+    score += nz(f_calculateRoundNumberScore(D), 0)
+    if i_useVolumeConfirm
+        score += nz(f_calculateVolumeScore(dBar), 0)
+    if i_useRSIDivergence
+        bool hasDivergence = f_checkRSIDivergence(isBullish, X, D, xBar, dBar)
+        if hasDivergence
+            score += 10
+    // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+    // GELIÅMIÅ MOMENTUM FILTRELERI
+    // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+    if i_useADXFilter
+        if f_checkADXStrength(dBar)
+            score += 10
+    if i_useBBFilter
+        if f_checkBBSqueeze(dBar, isBullish)
+            score += 8
+    if i_useStochFilter
+        if f_checkStochasticCross(dBar, isBullish)
+            score += 8
+    if i_useMACDFilter
+        if f_checkMACDMomentum(dBar, isBullish)
+            score += 8
+    if i_useABCDTimeSym
+        if f_checkABCDTimeSymmetry(xBar, aBar, cBar, dBar)
+            score += 5
+    score += nz(f_calculatePenalties(patType, xBar, dBar, isBullish, tfMinutes), 0)
+    float finalScore = math.max(0, math.min(100, score))
+    finalScore
+f_getMinScoreByTF() =>
+    // Gercekci esikler - ortalama skorlar 20-30 arasi cikiyor
+    int minScore = tfMinutes <= 5 ? 30 : tfMinutes <= 15 ? 25 : tfMinutes <= 60 ? 20 : 15
+    minScore
+f_przTouched(int Dbar, float przTop, float przBot, float D, bool isBullish) =>
+    bool touched = false
+    if na(przTop) or na(przBot) or na(D) or na(Dbar)
+        touched := false
+    else
+        // D barindan itibaren (D DAHIL) fiyat PRZ bolgesine degdi mi?
+        int barsAfterD = bar_index - Dbar
+        if barsAfterD >= 0  // D bari DAHIL (eskisi >= 1 idi, D'yi atliyordu)
+            int checkLimit = math.min(barsAfterD + 1, 100)  // +1 cunku D bari dahil
+            for offset = 0 to checkLimit - 1
+                int barOffset = barsAfterD - offset  // D barindan basla (eskisi D+1'den basliyordu)
+                if barOffset >= 0
+                    float h = high[barOffset]
+                    float l = low[barOffset]
+                    // Fiyat PRZ bolgesine degdi mi?
+                    bool priceInZone = l <= przTop and h >= przBot
+                    if priceInZone
+                        touched := true
+                        break
+    touched
+var int lastSLTPDbar = 0
+var array<string> patTypes = array.new<string>()
+var array<int> patBars = array.new<int>()
+var array<float> patPrzTop = array.new<float>()
+var array<float> patPrzBot = array.new<float>()
+var array<bool> patBull = array.new<bool>()
+var array<bool> patEval = array.new<bool>()
+var array<float> patTP1 = array.new<float>()
+var array<float> patSL = array.new<float>()
+var array<float> patEntry = array.new<float>()
+var array<string> patQuality = array.new<string>()
+var array<bool> patFilterPassed = array.new<bool>()
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+// DINAMIK SKOR HESAPLAMA ICIN PATTERN VERILERI
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+var array<float> patX = array.new<float>()    // X fiyati
+var array<float> patA = array.new<float>()    // A fiyati
+var array<float> patB = array.new<float>()    // B fiyati
+var array<float> patC = array.new<float>()    // C fiyati
+var array<float> patD = array.new<float>()    // D fiyati
+var array<int> patXbar = array.new<int>()     // X bar
+var array<int> patAbar = array.new<int>()     // A bar
+var array<int> patBbar = array.new<int>()     // B bar
+var array<int> patCbar = array.new<int>()     // C bar
+var array<int> patDbar = array.new<int>()     // D bar
+var array<bool> patIsBull = array.new<bool>() // Bullish/Bearish
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+// FILTRELENMIÅ ISTATISTIK VE SKOR TRACKING DEÄIÅKENLERI
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+var array<float> patScores = array.new<float>()
+var int gartW_filtered = 0, var int gartL_filtered = 0
+var int batW_filtered = 0, var int batL_filtered = 0
+var int bflyW_filtered = 0, var int bflyL_filtered = 0
+var int sharkW_filtered = 0, var int sharkL_filtered = 0
+var int cyphW_filtered = 0, var int cyphL_filtered = 0
+var float gartScoreSum = 0.0, var int gartScoreCount = 0
+var float batScoreSum = 0.0, var int batScoreCount = 0
+var float bflyScoreSum = 0.0, var int bflyScoreCount = 0
+var float sharkScoreSum = 0.0, var int sharkScoreCount = 0
+var float cyphScoreSum = 0.0, var int cyphScoreCount = 0
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+var array<float> smc_fvg_top = array.new<float>()
+var array<float> smc_fvg_bot = array.new<float>()
+var array<int> smc_fvg_bar = array.new<int>()
+var array<bool> smc_fvg_bull = array.new<bool>()
+var array<box> smc_fvg_box = array.new<box>()
+var array<label> smc_fvg_lbl = array.new<label>()
+var array<float> smc_ifvg_top = array.new<float>()
+var array<float> smc_ifvg_bot = array.new<float>()
+var array<int> smc_ifvg_bar = array.new<int>()
+var array<int> smc_ifvg_inv_bar = array.new<int>()
+var array<bool> smc_ifvg_bull = array.new<bool>()
+var array<box> smc_ifvg_box = array.new<box>()
+var array<label> smc_ifvg_lbl = array.new<label>()
+var array<float> smc_bpr_top = array.new<float>()
+var array<float> smc_bpr_bot = array.new<float>()
+var array<int> smc_bpr_bar = array.new<int>()
+var array<box> smc_bpr_box = array.new<box>()
+var array<label> smc_bpr_lbl = array.new<label>()
+int smcMaxLookback = 500
+int smcBoxExtend = 500
+color fvgColorBullish = fvgColorBullishInput
+color fvgColorBearish = fvgColorBearishInput
+color smcBoxColorBull = ifvgColorBullishInput
+color smcBoxColorBear = ifvgColorBearishInput
+color smcBoxColorBPR = color.new(#9C27B0, 80)
+// Fraktal S/R Zone Arrays
+var array<float> sr_top = array.new<float>()
+var array<float> sr_bot = array.new<float>()
+var array<int> sr_bar = array.new<int>()
+var array<bool> sr_isSupport = array.new<bool>()
+var array<int> sr_touches = array.new<int>()
+var array<box> sr_boxes = array.new<box>()
+var int sr_debug_count = 0
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+// CRITICAL PATH: S/R Zone Detection
+// PERFORMANCE: Runs on every confirmed bar, creates/deletes boxes (expensive)
+// OPTIMIZATION: Consider caching fractal results, limiting box operations
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+// S/R Zone Detection - Basitlestirilmis ve Calisir Versiyon
+f_detectFractalSR() =>
+    if showSRZones and barstate.isconfirmed
+        // KORUYUCU: Need at least 5 bars for fractal detection (bar[0] to bar[4])
+        if bar_index >= 4
+            // Fraktal deteksiyonu - merkez bar[2]
+            bool isFractalHigh = high[2] > high[4] and high[2] > high[3] and high[2] > high[1] and high[2] > high[0]
+            bool isFractalLow = low[2] < low[4] and low[2] < low[3] and low[2] < low[1] and low[2] < low[0]
+            int fractalBar = bar_index - 2
+            // Direnc Zone olustur
+            if isFractalHigh
+                float zTop = high[2]
+                float zBot = math.max(open[2], close[2])
+                // Minimum zone kalinligi kontrolu
+                if zTop - zBot > syminfo.mintick * 2
+                    // Limit kontrolu - en eskiyi sil
+                    if array.size(sr_boxes) >= srMaxZones
+                        box oldBox = array.shift(sr_boxes)
+                        if not na(oldBox)
+                            box.delete(oldBox)
+                        array.shift(sr_top)
+                        array.shift(sr_bot)
+                        array.shift(sr_bar)
+                        array.shift(sr_isSupport)
+                        array.shift(sr_touches)
+                    // Yeni zone ekle - baslangicta gizli, sola maksimum uzansin
+                    int leftBar = math.max(0, bar_index - 4000)  // max_bars_back siniri icinde
+                    box newBox = box.new(
+                        left = leftBar,
+                        top = zTop,
+                        right = bar_index + 100,
+                        bottom = zBot,
+                        bgcolor = color.new(color.gray, 100),
+                        border_color = color.new(color.gray, 100),
+                        border_width = 1,
+                        xloc = xloc.bar_index
+                    )
+                    array.push(sr_boxes, newBox)
+                    array.push(sr_top, zTop)
+                    array.push(sr_bot, zBot)
+                    array.push(sr_bar, fractalBar)
+                    array.push(sr_isSupport, false)
+                    array.push(sr_touches, 1)
+            // Destek Zone olustur
+            if isFractalLow
+                float zBot = low[2]
+                float zTop = math.min(open[2], close[2])
+                if zTop - zBot > syminfo.mintick * 2
+                    if array.size(sr_boxes) >= srMaxZones
+                        box oldBox = array.shift(sr_boxes)
+                        if not na(oldBox)
+                            box.delete(oldBox)
+                        array.shift(sr_top)
+                        array.shift(sr_bot)
+                        array.shift(sr_bar)
+                        array.shift(sr_isSupport)
+                        array.shift(sr_touches)
+                    // Yeni destek zone - baslangicta gizli, sola maksimum uzansin
+                    int leftBar = math.max(0, bar_index - 4000)
+                    box newBox = box.new(
+                        left = leftBar,
+                        top = zTop,
+                        right = bar_index + 100,
+                        bottom = zBot,
+                        bgcolor = color.new(color.gray, 100),
+                        border_color = color.new(color.gray, 100),
+                        border_width = 1,
+                        xloc = xloc.bar_index
+                    )
+                    array.push(sr_boxes, newBox)
+                    array.push(sr_top, zTop)
+                    array.push(sr_bot, zBot)
+                    array.push(sr_bar, fractalBar)
+                    array.push(sr_isSupport, true)
+                    array.push(sr_touches, 1)
+        // Mevcut zone'lari guncelle - saga uzat ve dokunus say
+        // OPTIMIZED: Cache array size and use early exit where possible
+        int srBoxesSize = array.size(sr_boxes)
+        if srBoxesSize > 0
+            for i = 0 to srBoxesSize - 1
+                box zBox = array.get(sr_boxes, i)
+                float zTop = array.get(sr_top, i)
+                float zBot = array.get(sr_bot, i)
+                bool isSupport = array.get(sr_isSupport, i)
+                int touches = array.get(sr_touches, i)
+                // Box'u saga uzat
+                if not na(zBox)
+                    box.set_right(zBox, bar_index + 50)
+                // Fiyat zone icinde mi? (dokunus sayisini artir)
+                // OPTIMIZED: Check zone bounds first before accessing bar data
+                bool priceInZone = high >= zBot and low <= zTop
+                if priceInZone
+                    int zBar = array.get(sr_bar, i)
+                    int barsSinceZone = bar_index - zBar
+                    if barsSinceZone > 10  // Son 10 bardan sonra say
+                        touches := math.min(touches + 1, 10)
+                        array.set(sr_touches, i, touches)
+                        // Renk ve gorunurluk guncelle
+                        if not na(zBox)
+                            // Minimum test sayisina gore gorunurluk
+                            if touches >= srMinTouches
+                                // Test sayisina gore renk yogunlugu
+                                int alpha = touches >= 5 ? 35 : (touches >= 3 ? 50 : 65)
+                                int borderW = touches >= 4 ? 2 : 1
+                                if isSupport
+                                    box.set_bgcolor(zBox, color.new(color.green, alpha))
+                                    box.set_border_color(zBox, color.new(color.green, alpha - 20))
+                                else
+                                    box.set_bgcolor(zBox, color.new(color.red, alpha))
+                                    box.set_border_color(zBox, color.new(color.red, alpha - 20))
+                                box.set_border_width(zBox, borderW)
+                            else
+                                // Henuz yeterli test yok - gizli tut
+                                box.set_bgcolor(zBox, color.new(color.gray, 100))
+                                box.set_border_color(zBox, color.new(color.gray, 100))
+                // S/R Flip kontrolu - OPTIMIZED: Check current close against zone bounds
+                if isSupport and close < zBot
+                    array.set(sr_isSupport, i, false)
+                    if not na(zBox)
+                        box.set_bgcolor(zBox, colSRResistance)
+                        box.set_border_color(zBox, color.new(color.red, 80))
+                else if not isSupport and close > zTop
+                    array.set(sr_isSupport, i, true)
+                    if not na(zBox)
+                        box.set_bgcolor(zBox, colSRSupport)
+                        box.set_border_color(zBox, color.new(color.green, 80))
+    true
+f_detectFVG() =>
+    if useSMCFilter and smcFilterMode != "Kapali" and barstate.isconfirmed
+        while array.size(smc_fvg_bar) > smcMaxFVG
+            box oldBox = array.shift(smc_fvg_box)
+            if not na(oldBox)
+                box.delete(oldBox)
+            label oldLbl = array.shift(smc_fvg_lbl)
+            if not na(oldLbl)
+                label.delete(oldLbl)
+            array.shift(smc_fvg_top)
+            array.shift(smc_fvg_bot)
+            array.shift(smc_fvg_bar)
+            array.shift(smc_fvg_bull)
+        int maxCheck = math.min(smcMaxLookback, bar_index - 3)
+        if maxCheck >= 2
+            float candle1High = high[2]
+            float candle3Low = low[0]
+            if candle1High < candle3Low
+                float gapTop = candle3Low
+                float gapBot = candle1High
+                float gapSizePct = (gapTop - gapBot) / close * 100
+                if gapSizePct >= smcMinFVGSize
+                    bool alreadyExists = false
+                    int arrSize = array.size(smc_fvg_bar)
+                    if arrSize > 0
+                        for i = 0 to arrSize - 1
+                            if math.abs(array.get(smc_fvg_bar, i) - (bar_index - 1)) <= 2
+                                if math.abs(array.get(smc_fvg_top, i) - gapTop) < syminfo.mintick * 10
+                                    alreadyExists := true
+                                    break
+                    if not alreadyExists
+                        array.push(smc_fvg_top, gapTop)
+                        array.push(smc_fvg_bot, gapBot)
+                        array.push(smc_fvg_bar, bar_index - 1)
+                        array.push(smc_fvg_bull, true)
+                        if smcShowZones
+                            int leftTime = time[bar_index - (bar_index - 1)]
+                            int rightTime = time + (smcBoxExtend * (time - time[1]))
+                            box newBox = box.new(
+                                 left=leftTime,
+                                 top=gapTop,
+                                 right=rightTime,
+                                 bottom=gapBot,
+                                 bgcolor=fvgColorBullish,
+                                 border_width=0,
+                                 xloc=xloc.bar_time)
+                            array.push(smc_fvg_box, newBox)
+                            array.push(smc_fvg_lbl, label(na))
+                        else
+                            array.push(smc_fvg_box, box(na))
+                            array.push(smc_fvg_lbl, label(na))
+                        if array.size(smc_fvg_bar) > smcMaxFVG
+                            box oldBox = array.shift(smc_fvg_box)
+                            if not na(oldBox)
+                                box.delete(oldBox)
+                            label oldLbl = array.shift(smc_fvg_lbl)
+                            if not na(oldLbl)
+                                label.delete(oldLbl)
+                            array.shift(smc_fvg_top)
+                            array.shift(smc_fvg_bot)
+                            array.shift(smc_fvg_bar)
+                            array.shift(smc_fvg_bull)
+        if maxCheck >= 2
+            float candle1Low = low[2]
+            float candle3High = high[0]
+            if candle1Low > candle3High
+                float gapTop = candle1Low
+                float gapBot = candle3High
+                float gapSizePct = (gapTop - gapBot) / close * 100
+                if gapSizePct >= smcMinFVGSize
+                    bool alreadyExists = false
+                    int arrSize = array.size(smc_fvg_bar)
+                    if arrSize > 0
+                        for i = 0 to arrSize - 1
+                            if math.abs(array.get(smc_fvg_bar, i) - (bar_index - 1)) <= 2
+                                if math.abs(array.get(smc_fvg_bot, i) - gapBot) < syminfo.mintick * 10
+                                    alreadyExists := true
+                                    break
+                    if not alreadyExists
+                        array.push(smc_fvg_top, gapTop)
+                        array.push(smc_fvg_bot, gapBot)
+                        array.push(smc_fvg_bar, bar_index - 1)
+                        array.push(smc_fvg_bull, false)
+                        if smcShowZones
+                            int leftTime = time[bar_index - (bar_index - 1)]
+                            int rightTime = time + (smcBoxExtend * (time - time[1]))
+                            box newBox = box.new(
+                                 left=leftTime,
+                                 top=gapTop,
+                                 right=rightTime,
+                                 bottom=gapBot,
+                                 bgcolor=fvgColorBearish,
+                                 border_width=0,
+                                 xloc=xloc.bar_time)
+                            array.push(smc_fvg_box, newBox)
+                            array.push(smc_fvg_lbl, label(na))
+                        else
+                            array.push(smc_fvg_box, box(na))
+                            array.push(smc_fvg_lbl, label(na))
+                        if array.size(smc_fvg_bar) > smcMaxFVG
+                            box oldBox = array.shift(smc_fvg_box)
+                            if not na(oldBox)
+                                box.delete(oldBox)
+                            label oldLbl = array.shift(smc_fvg_lbl)
+                            if not na(oldLbl)
+                                label.delete(oldLbl)
+                            array.shift(smc_fvg_top)
+                            array.shift(smc_fvg_bot)
+                            array.shift(smc_fvg_bar)
+                            array.shift(smc_fvg_bull)
+    true
+f_checkInversion() =>
+    if useSMCFilter and smcFilterMode != "Kapali" and barstate.isconfirmed
+        while array.size(smc_ifvg_bar) > smcMaxFVG
+            box oldBox = array.shift(smc_ifvg_box)
+            if not na(oldBox)
+                box.delete(oldBox)
+            label oldLbl = array.shift(smc_ifvg_lbl)
+            if not na(oldLbl)
+                label.delete(oldLbl)
+            array.shift(smc_ifvg_top)
+            array.shift(smc_ifvg_bot)
+            array.shift(smc_ifvg_bar)
+            array.shift(smc_ifvg_inv_bar)
+            array.shift(smc_ifvg_bull)
+        int fvgSize = array.size(smc_fvg_bar)
+        if fvgSize > 0
+            for i = fvgSize - 1 to 0
+                float zTop = array.get(smc_fvg_top, i)
+                float zBot = array.get(smc_fvg_bot, i)
+                bool zBull = array.get(smc_fvg_bull, i)
+                int zBar = array.get(smc_fvg_bar, i)
+                int maxHistoryBars = 4500
+                int barsAgo = bar_index - zBar
+                if barsAgo > maxHistoryBars or barsAgo < 0
+                    continue
+                bool inverted = false
+                if zBull and close <= zTop
+                    inverted := true
+                    array.push(smc_ifvg_top, zTop)
+                    array.push(smc_ifvg_bot, zBot)
+                    array.push(smc_ifvg_bar, zBar)
+                    array.push(smc_ifvg_inv_bar, bar_index)
+                    array.push(smc_ifvg_bull, false)
+                    if smcShowZones
+                        int lookbackBars = math.max(0, math.min(bar_index - zBar, bar_index - 1))
+                        int leftTime = time[lookbackBars]
+                        int rightTime = time + (smcBoxExtend * (time - time[1]))
+                        box newBox = box.new(
+                             left=leftTime,
+                             top=zTop,
+                             right=rightTime,
+                             bottom=zBot,
+                             bgcolor=smcBoxColorBear,
+                             border_width=1,
+                             border_color=color.new(#424242, 50),
+                             xloc=xloc.bar_time)
+                        array.push(smc_ifvg_box, newBox)
+                        label newLbl = label.new(
+                             x=leftTime,
+                             y=zTop,
+                             text="iFVG #" + str.tostring(zBar),
+                             style=label.style_label_down,
+                             size=size.tiny,
+                             color=color.new(#424242, 70),
+                             textcolor=color.white,
+                             xloc=xloc.bar_time)
+                        array.push(smc_ifvg_lbl, newLbl)
+                    else
+                        array.push(smc_ifvg_box, box(na))
+                        array.push(smc_ifvg_lbl, label(na))
+                if not zBull and close >= zBot
+                    inverted := true
+                    array.push(smc_ifvg_top, zTop)
+                    array.push(smc_ifvg_bot, zBot)
+                    array.push(smc_ifvg_bar, zBar)
+                    array.push(smc_ifvg_inv_bar, bar_index)
+                    array.push(smc_ifvg_bull, true)
+                    if smcShowZones
+                        int lookbackBars = math.max(0, math.min(bar_index - zBar, bar_index - 1))
+                        int leftTime = time[lookbackBars]
+                        int rightTime = time + (smcBoxExtend * (time - time[1]))
+                        box newBox = box.new(
+                             left=leftTime,
+                             top=zTop,
+                             right=rightTime,
+                             bottom=zBot,
+                             bgcolor=smcBoxColorBull,
+                             border_width=1,
+                             border_color=color.new(#BDBDBD, 50),
+                             xloc=xloc.bar_time)
+                        array.push(smc_ifvg_box, newBox)
+                        label newLbl = label.new(
+                             x=leftTime,
+                             y=zBot,
+                             text="iFVG #" + str.tostring(zBar),
+                             style=label.style_label_up,
+                             size=size.tiny,
+                             color=color.new(#BDBDBD, 70),
+                             textcolor=color.black,
+                             xloc=xloc.bar_time)
+                        array.push(smc_ifvg_lbl, newLbl)
+                    else
+                        array.push(smc_ifvg_box, box(na))
+                        array.push(smc_ifvg_lbl, label(na))
+                if inverted
+                    box oldBox = array.get(smc_fvg_box, i)
+                    if not na(oldBox)
+                        box.delete(oldBox)
+                    array.remove(smc_fvg_top, i)
+                    array.remove(smc_fvg_bot, i)
+                    array.remove(smc_fvg_bar, i)
+                    array.remove(smc_fvg_bull, i)
+                    array.remove(smc_fvg_box, i)
+                    array.remove(smc_fvg_lbl, i)
+    true
+f_mitigateZones() =>
+    if useSMCFilter and smcFilterMode != "Kapali"
+        while array.size(smc_fvg_bar) > smcMaxFVG
+            box oldBox = array.shift(smc_fvg_box)
+            if not na(oldBox)
+                box.delete(oldBox)
+            label oldLbl = array.shift(smc_fvg_lbl)
+            if not na(oldLbl)
+                label.delete(oldLbl)
+            array.shift(smc_fvg_top)
+            array.shift(smc_fvg_bot)
+            array.shift(smc_fvg_bar)
+            array.shift(smc_fvg_bull)
+        while array.size(smc_ifvg_bar) > smcMaxFVG
+            box oldBox = array.shift(smc_ifvg_box)
+            if not na(oldBox)
+                box.delete(oldBox)
+            label oldLbl = array.shift(smc_ifvg_lbl)
+            if not na(oldLbl)
+                label.delete(oldLbl)
+            array.shift(smc_ifvg_top)
+            array.shift(smc_ifvg_bot)
+            array.shift(smc_ifvg_bar)
+            array.shift(smc_ifvg_inv_bar)
+            array.shift(smc_ifvg_bull)
+        while array.size(smc_bpr_bar) > smcMaxFVG
+            box oldBox = array.shift(smc_bpr_box)
+            if not na(oldBox)
+                box.delete(oldBox)
+            label oldLbl = array.shift(smc_bpr_lbl)
+            if not na(oldLbl)
+                label.delete(oldLbl)
+            array.shift(smc_bpr_top)
+            array.shift(smc_bpr_bot)
+            array.shift(smc_bpr_bar)
+        int ifvgSize = array.size(smc_ifvg_bar)
+        if ifvgSize > 0
+            for i = ifvgSize - 1 to 0
+                float zTop = array.get(smc_ifvg_top, i)
+                float zBot = array.get(smc_ifvg_bot, i)
+                bool zBull = array.get(smc_ifvg_bull, i)
+                int zBar = array.get(smc_ifvg_bar, i)
+                int zInvBar = array.get(smc_ifvg_inv_bar, i)
+                int maxHistoryBars = 4500
+                int barsAgo = bar_index - zBar
+                if barsAgo > maxHistoryBars or barsAgo < 0
+                    continue
+                bool mitigated = false
+                if zBull
+                    bool touched = low <= zTop and low >= zBot
+                    bool passedThrough = low < zBot
+                    if touched or passedThrough
+                        mitigated := true
+                if not zBull
+                    bool touched = high >= zBot and high <= zTop
+                    bool passedThrough = high > zTop
+                    if touched or passedThrough
+                        mitigated := true
+                if bar_index - zInvBar > smcMaxLookback
+                    mitigated := true
+                if mitigated
+                    box bx = array.get(smc_ifvg_box, i)
+                    if not na(bx)
+                        box.delete(bx)
+                    label lbl = array.get(smc_ifvg_lbl, i)
+                    if not na(lbl)
+                        label.delete(lbl)
+                    array.remove(smc_ifvg_top, i)
+                    array.remove(smc_ifvg_bot, i)
+                    array.remove(smc_ifvg_bar, i)
+                    array.remove(smc_ifvg_inv_bar, i)
+                    array.remove(smc_ifvg_bull, i)
+                    array.remove(smc_ifvg_box, i)
+                    array.remove(smc_ifvg_lbl, i)
+        int bprSize = array.size(smc_bpr_bar)
+        if bprSize > 0
+            for i = bprSize - 1 to 0
+                float zTop = array.get(smc_bpr_top, i)
+                float zBot = array.get(smc_bpr_bot, i)
+                int zBar = array.get(smc_bpr_bar, i)
+                int maxHistoryBars = 4500
+                int barsAgo = bar_index - zBar
+                if barsAgo > maxHistoryBars or barsAgo < 0
+                    continue
+                bool mitigated = false
+                bool touchedByLow = low <= zTop and low >= zBot
+                bool touchedByHigh = high >= zBot and high <= zTop
+                bool passedDown = low < zBot
+                bool passedUp = high > zTop
+                if touchedByLow or touchedByHigh or passedDown or passedUp
+                    mitigated := true
+                if bar_index - zBar > smcMaxLookback
+                    mitigated := true
+                if mitigated
+                    box bx = array.get(smc_bpr_box, i)
+                    if not na(bx)
+                        box.delete(bx)
+                    label lbl = array.get(smc_bpr_lbl, i)
+                    if not na(lbl)
+                        label.delete(lbl)
+                    array.remove(smc_bpr_top, i)
+                    array.remove(smc_bpr_bot, i)
+                    array.remove(smc_bpr_bar, i)
+                    array.remove(smc_bpr_box, i)
+                    array.remove(smc_bpr_lbl, i)
+    true
+f_detectBPR() =>
+    bool result = true
+    if useSMCFilter and smcFilterMode != "Kapali" and barstate.isconfirmed
+        int arrSize = array.size(smc_ifvg_bar)
+        if arrSize >= 2
+            int lastIdx = arrSize - 1
+            float lastTop = array.get(smc_ifvg_top, lastIdx)
+            float lastBot = array.get(smc_ifvg_bot, lastIdx)
+            bool lastBull = array.get(smc_ifvg_bull, lastIdx)
+            int lastBar = array.get(smc_ifvg_bar, lastIdx)
+            if lastIdx > 0
+                for i = 0 to lastIdx - 1
+                    bool iBull = array.get(smc_ifvg_bull, i)
+                    if iBull != lastBull
+                        float iTop = array.get(smc_ifvg_top, i)
+                        float iBot = array.get(smc_ifvg_bot, i)
+                        int iBar = array.get(smc_ifvg_bar, i)
+                        int maxHistoryBars = 4500
+                        int barsAgo = bar_index - iBar
+                        if barsAgo > maxHistoryBars or barsAgo < 0
+                            continue
+                        float overlapTop = math.min(lastTop, iTop)
+                        float overlapBot = math.max(lastBot, iBot)
+                        if overlapTop > overlapBot
+                            bool alreadyExists = false
+                            int bprSize = array.size(smc_bpr_bar)
+                            if bprSize > 0
+                                for j = 0 to bprSize - 1
+                                    if math.abs(array.get(smc_bpr_top, j) - overlapTop) < syminfo.mintick * 10
+                                        if math.abs(array.get(smc_bpr_bot, j) - overlapBot) < syminfo.mintick * 10
+                                            alreadyExists := true
+                                            break
+                            if not alreadyExists
+                                int sourceBar = math.min(iBar, lastBar)
+                                array.push(smc_bpr_top, overlapTop)
+                                array.push(smc_bpr_bot, overlapBot)
+                                array.push(smc_bpr_bar, sourceBar)
+                                if smcShowZones
+                                    int lookbackBars = math.max(0, math.min(bar_index - sourceBar, bar_index - 1))
+                                    int leftTime = time[lookbackBars]
+                                    int rightTime = time + (smcBoxExtend * (time - time[1]))
+                                    box newBox = box.new(
+                                         left=leftTime,
+                                         top=overlapTop,
+                                         right=rightTime,
+                                         bottom=overlapBot,
+                                         bgcolor=smcBoxColorBPR,
+                                         border_width=1,
+                                         border_color=color.new(#212121, 50),
+                                         xloc=xloc.bar_time)
+                                    array.push(smc_bpr_box, newBox)
+                                    label newLbl = label.new(
+                                         x=leftTime,
+                                         y=(overlapTop + overlapBot) / 2,
+                                         text="BPR #" + str.tostring(sourceBar),
+                                         style=label.style_label_left,
+                                         size=size.tiny,
+                                         color=color.new(#212121, 70),
+                                         textcolor=color.white,
+                                         xloc=xloc.bar_time)
+                                    array.push(smc_bpr_lbl, newLbl)
+                                else
+                                    array.push(smc_bpr_box, box(na))
+                                    array.push(smc_bpr_lbl, label(na))
+    result
+f_checkSMCConfluence(float targetPrice, bool isBullish) =>
+    bool hasSMC = false
+    string smcType = ""
+    float smcTop = na
+    float smcBot = na
+    int smcBar = 0  // FIX: int cannot be na, use 0 as default
+    if useSMCFilter and smcFilterMode != "Kapali" and not na(targetPrice)
+        if array.size(smc_ifvg_bar) > 0
+            for i = 0 to array.size(smc_ifvg_bar) - 1
+                float zTop = array.get(smc_ifvg_top, i)
+                float zBot = array.get(smc_ifvg_bot, i)
+                bool zBull = array.get(smc_ifvg_bull, i)
+                if targetPrice >= zBot and targetPrice <= zTop
+                    if (isBullish and zBull) or (not isBullish and not zBull)
+                        hasSMC := true
+                        smcType := "iFVG"
+                        smcTop := zTop
+                        smcBot := zBot
+                        smcBar := array.get(smc_ifvg_bar, i)
+                        break
+        if not hasSMC and array.size(smc_bpr_bar) > 0
+            for i = 0 to array.size(smc_bpr_bar) - 1
+                float zTop = array.get(smc_bpr_top, i)
+                float zBot = array.get(smc_bpr_bot, i)
+                if targetPrice >= zBot and targetPrice <= zTop
+                    hasSMC := true
+                    smcType := "BPR"
+                    smcTop := zTop
+                    smcBot := zBot
+                    smcBar := array.get(smc_bpr_bar, i)
+                    break
+    [hasSMC, smcType, smcTop, smcBot, smcBar]
+f_findCandidateC(int Bbar, bool isBullish) =>
+    float candidatePrice = na
+    int candidateBar = 0  // FIX: int cannot be na, use 0 as default
+    // KORUYUCU: Check for valid Bbar reference (must be within current bar history)
+    if Bbar < 0 or Bbar > bar_index
+        [candidatePrice, candidateBar]
+    else
+        int barsFromB = bar_index - Bbar
+        // KORUYUCU: Limit search to SAFE_CANDIDATE_SEARCH bars (was potentially 500)
+        int searchLimit = math.min(barsFromB, SAFE_CANDIDATE_SEARCH)
+        if barsFromB > 0 and barsFromB < 500 and searchLimit > 0
+            if isBullish
+                candidatePrice := high[barsFromB]
+                candidateBar := Bbar
+                for i = barsFromB - 1 to math.max(0, barsFromB - searchLimit)
+                    if high[i] > candidatePrice
+                        candidatePrice := high[i]
+                        candidateBar := bar_index - i
+            else
+                candidatePrice := low[barsFromB]
+                candidateBar := Bbar
+                for i = barsFromB - 1 to math.max(0, barsFromB - searchLimit)
+                    if low[i] < candidatePrice
+                        candidatePrice := low[i]
+                        candidateBar := bar_index - i
+    [candidatePrice, candidateBar]
+f_checkInstantBreakout(array<float> zP, array<int> zB, array<int> zD) =>
+    string pat = ""
+    float prz_xa = na, float prz_bc = na, float prz_abcd = na, float prz_ba = na
+    string ratioText = ""
+    bool isBullish = false
+    bool breakoutTriggered = false
+    float X = na, float A = na, float B = na, float C = na
+    int Xbar = 0, int Abar = 0, int Bbar = 0, int Cbar = 0
+    int sz = array.size(zP)
+    if sz >= 3
+        for offset = 0 to (sz >= 4 ? 1 : 0)
+            if pat != ""
+                break
+            float b_pt = array.get(zP, 0 + offset)
+            int b_bar = array.get(zB, 0 + offset)
+            float a_pt = array.get(zP, 1 + offset)
+            int a_bar = array.get(zB, 1 + offset)
+            float x_pt = array.get(zP, 2 + offset)
+            int x_bar = array.get(zB, 2 + offset)
+            bool bull = x_pt < a_pt
+            bool triggered = false
+            float cand_c = na
+            int cand_cbar = 0
+            if offset == 0
+                triggered := bull ? low < b_pt : high > b_pt
+                [cand_c, cand_cbar] = f_findCandidateC(b_bar, bull)
+            else
+                triggered := true
+                cand_c := array.get(zP, 0)
+                cand_cbar := array.get(zB, 0)
+            if triggered and not na(cand_c)
+                float xab = f_calcRatio(a_pt, b_pt, x_pt, a_pt)
+                float abc = f_calcRatio(b_pt, cand_c, a_pt, b_pt)
+                float xac = f_calcRatio(x_pt, cand_c, x_pt, a_pt)
+                bool bValid = bull ? (b_pt > x_pt and b_pt < a_pt) : (b_pt < x_pt and b_pt > a_pt)
+                bool cBelowA = bull ? cand_c < a_pt : cand_c > a_pt
+                bool cBeyondA = bull ? cand_c > a_pt : cand_c < a_pt
+                if bValid
+                    // Swing Validation (OTT Pilot)
+                    float xa_size = math.abs(a_pt - x_pt)
+                    float min_swing = useAutoPilot ? f_getMinSwingAtr() : 0.0
+                    if xa_size >= min_swing
+                        bool[] enabledPatterns = array.from(gartleyOn, batOn, butterflyOn, sharkOn, cypherOn)
+                        [foundPat, foundXA, foundBC, foundABCD, foundBA] = f_scanPatterns(xab, abc, xac, strictErrorPct, cBelowA, cBeyondA, enabledPatterns)
+                        if foundPat != ""
+                            pat := foundPat
+                            prz_xa := foundXA
+                            prz_bc := foundBC
+                            prz_abcd := foundABCD
+                            prz_ba := foundBA
+                            isBullish := bull
+                            breakoutTriggered := true
+                            X := x_pt
+                            A := a_pt
+                            B := b_pt
+                            C := cand_c
+                            Xbar := x_bar
+                            Abar := a_bar
+                            Bbar := b_bar
+                            Cbar := cand_cbar
+                            ratioText := "B:" + str.tostring(xab, "#.###") + " C:" + str.tostring(abc, "#.###")
+    [pat, prz_xa, prz_bc, prz_abcd, prz_ba, ratioText, isBullish, breakoutTriggered, X, A, B, C, Xbar, Abar, Bbar, Cbar]
+pot_checkPotentialWithConfirmedB(array<float> zP, array<int> zB, array<int> zD) =>
+    string pat = ""
+    float prz_xa = na, float prz_bc = na, float prz_abcd = na, float prz_ba = na
+    string ratioText = ""
+    bool isBullish = false
+    bool patternFound = false
+    float X = na, float A = na, float B = na, float C = na
+    int Xbar = 0, int Abar = 0, int Bbar = 0, int Cbar = 0
+    if array.size(zP) >= 3 and array.size(zD) >= 3
+        B := array.get(zP, 0)
+        Bbar := array.get(zB, 0)
+        A := array.get(zP, 1)
+        Abar := array.get(zB, 1)
+        X := array.get(zP, 2)
+        Xbar := array.get(zB, 2)
+        int dirB = array.get(zD, 0)
+        isBullish := dirB == -1
+        float xab = f_calcRatio(A, B, X, A)
+        bool bValid = isBullish ? (B > X and B < A) : (B < X and B > A)
+        if bValid
+            [candC, candCbar] = f_findCandidateC(Bbar, isBullish)
+            bool cExists = not na(candC) and not na(candCbar) and math.abs(candCbar - Bbar) >= 2
+            if cExists
+                C := candC
+                Cbar := candCbar
+                // B TETIKLENME: Fiyat B seviyesini kirdi mi?
+                // OPTIMIZED: Limit check range and add early exit
+                bool bTriggered = false
+                int barsFromC = bar_index - Cbar
+                int maxCheck = math.min(barsFromC, SAFE_TP_CHECK_LIMIT)
+                if barsFromC >= 0 and maxCheck > 0
+                    for i = 0 to maxCheck - 1
+                        if isBullish ? low[i] <= B : high[i] >= B
+                            bTriggered := true
+                            break
+                if bTriggered
+                    float xa_size = math.abs(A - X)
+                    float min_swing = useAutoPilot ? f_getMinSwingAtr() : 0.0
+                    if xa_size >= min_swing
+                        float abc = f_calcRatio(B, C, A, B)
+                        float xac = f_calcRatio(X, C, X, A)
+                        bool cBelowA = isBullish ? C < A : C > A
+                        bool cBeyondA = isBullish ? C > A : C < A
+                        bool[] enabledPatterns = array.from(gartleyOn, batOn, butterflyOn, sharkOn, cypherOn)
+                        [foundPat, foundXA, foundBC, foundABCD, foundBA] = f_scanPatterns(xab, abc, xac, strictErrorPct, cBelowA, cBeyondA, enabledPatterns)
+                        if foundPat != ""
+                            pat := foundPat
+                            prz_xa := foundXA
+                            prz_bc := foundBC
+                            prz_abcd := foundABCD
+                            prz_ba := foundBA
+                            ratioText := "B:" + str.tostring(xab, "#.###") + " C:" + str.tostring(abc, "#.###")
+                            patternFound := true
+    [pat, prz_xa, prz_bc, prz_abcd, prz_ba, ratioText, isBullish, patternFound, X, A, B, C, Xbar, Abar, Bbar, Cbar]
+f_drawBreakoutPattern(string pat, float prz_xa, float prz_bc, float prz_abcd, float prz_ba, string ratioText, float X, int Xbar, float A, int Abar, float B, int Bbar, float C, int Cbar, bool isBullish, string zigLabel, int breakoutBar, bool isPotential = false) =>
+    bool shouldDraw = false
+    int Dbar = 0  // FIX: int cannot be na, use 0 as default
+    float D = na
+    if pat != ""
+        [lvl_xa, lvl_bc, lvl_abcd, lvl_ba, przT, przB] = f_calcPRZ_Cluster(isBullish, X, A, B, C, prz_xa, prz_bc, prz_abcd, prz_ba)
+        D := not na(lvl_xa) ? lvl_xa : (isBullish ? low[bar_index - breakoutBar] : high[bar_index - breakoutBar])
+        Dbar := breakoutBar
+        bool hasPRZ = not na(przT) and not na(przB)
+        bool przTouched = f_przTouched(Dbar, przT, przB, D, isBullish)
+        int barsSincePattern = bar_index - Dbar
+        bool patternMatured = barsSincePattern > przBars
+        bool rsiValid = true
+        if filterRSIActive
+            [rsiStatus, rsiSymbol, rsiAtD] = f_getRSIStatus(isBullish, Dbar)
+            bool rsiOBOSok = (isBullish and rsiAtD <= rsiOSFinal) or (not isBullish and rsiAtD >= rsiOBFinal)
+            bool divergenceOk = true
+            bool isExtensionPat = str.contains(pat, "Butterfly") or str.contains(pat, "Crab") or str.contains(pat, "Alt")
+            if rsiDivergenceRequired and isExtensionPat
+                divergenceOk := f_checkRSIDivergence(isBullish, X, D, Xbar, Dbar)
+            rsiValid := rsiOBOSok and divergenceOk
+        bool trendOk = f_checkTrendAlignment(isBullish, D)
+        bool rvolOk = f_checkRVol(Dbar)
+        [hasSMCConfluence, smcZoneType, smcZoneTop, smcZoneBot, smcZoneBar] = f_checkSMCConfluence(D, isBullish)
+        bool hasDivergence = false
+        if not isPotential
+            hasDivergence := f_checkRSIDivergence(isBullish, X, D, Xbar, Dbar)
+        // RSI Extreme Zone kontrolu - OPTIMIZED: Use global rsiValue with proper indexing
+        int rsiLookback = bar_index - Dbar
+        float currentRSI = rsiLookback >= 0 and rsiLookback < 500 ? rsiValue[rsiLookback] : 50
+        bool rsiExtreme = isBullish ? (currentRSI <= 45) : (currentRSI >= 55)
+        int filterScore = 0
+        if isPotential
+            filterScore := 45
+            filterScore += trendOk ? 20 : 0
+            filterScore += rvolOk ? 15 : 0
+            filterScore += hasSMCConfluence ? 20 : 0
+            // Gelismis momentum filtreleri - potansiyel pattern'ler icin
+            if i_useADXFilter and f_checkADXStrength(Dbar)
+                filterScore += 5
+            if i_useBBFilter and f_checkBBSqueeze(Dbar, isBullish)
+                filterScore += 4
+            if i_useStochFilter and f_checkStochasticCross(Dbar, isBullish)
+                filterScore += 4
+            if i_useMACDFilter and f_checkMACDMomentum(Dbar, isBullish)
+                filterScore += 4
+            if i_useABCDTimeSym and f_checkABCDTimeSymmetry(Xbar, Abar, Cbar, Dbar)
+                filterScore += 3
+        else
+            // Pattern bazli baslangic skoru
+            bool isVeryWeakPattern = pat == "Bat" or pat == "Shark"
+            bool isWeakPattern = pat == "Cypher"
+            bool isStrongPattern = pat == "Gartley" or pat == "Butterfly"
+            if isStrongPattern
+                filterScore := 50
+                filterScore += trendOk ? 15 : 0
+                filterScore += hasSMCConfluence ? 15 : 0
+                filterScore += rsiExtreme ? 10 : 0
+                filterScore += hasDivergence ? 10 : 0
+                filterScore += rvolOk ? 10 : 0
+                // Gelismis momentum filtreleri
+                if i_useADXFilter and f_checkADXStrength(Dbar)
+                    filterScore += 5
+                if i_useBBFilter and f_checkBBSqueeze(Dbar, isBullish)
+                    filterScore += 4
+                if i_useStochFilter and f_checkStochasticCross(Dbar, isBullish)
+                    filterScore += 4
+                if i_useMACDFilter and f_checkMACDMomentum(Dbar, isBullish)
+                    filterScore += 4
+                if i_useABCDTimeSym and f_checkABCDTimeSymmetry(Xbar, Abar, Cbar, Dbar)
+                    filterScore += 3
+            else if isWeakPattern
+                // Cypher icin trend onemli
+                filterScore := 40
+                filterScore += trendOk ? 20 : -10
+                filterScore += hasSMCConfluence ? 15 : 0
+                filterScore += rsiExtreme ? 15 : 0
+                filterScore += hasDivergence ? 15 : -5
+                filterScore += rvolOk ? 10 : 0
+                // Gelismis momentum filtreleri
+                if i_useADXFilter and f_checkADXStrength(Dbar)
+                    filterScore += 5
+                if i_useBBFilter and f_checkBBSqueeze(Dbar, isBullish)
+                    filterScore += 4
+                if i_useStochFilter and f_checkStochasticCross(Dbar, isBullish)
+                    filterScore += 4
+                if i_useMACDFilter and f_checkMACDMomentum(Dbar, isBullish)
+                    filterScore += 4
+                if i_useABCDTimeSym and f_checkABCDTimeSymmetry(Xbar, Abar, Cbar, Dbar)
+                    filterScore += 3
+            else
+                // Bat ve Shark - trend ve divergence ZORUNLU
+                filterScore := 25
+                filterScore += trendOk ? 30 : -25  // Trend yoksa cok dusuk
+                filterScore += hasSMCConfluence ? 15 : 0
+                filterScore += rsiExtreme ? 20 : -10
+                filterScore += hasDivergence ? 25 : -20  // Divergence yoksa dusuk
+                filterScore += rvolOk ? 10 : 0
+                // Gelismis momentum filtreleri
+                if i_useADXFilter and f_checkADXStrength(Dbar)
+                    filterScore += 8
+                if i_useBBFilter and f_checkBBSqueeze(Dbar, isBullish)
+                    filterScore += 6
+                if i_useStochFilter and f_checkStochasticCross(Dbar, isBullish)
+                    filterScore += 6
+                if i_useMACDFilter and f_checkMACDMomentum(Dbar, isBullish)
+                    filterScore += 6
+                if i_useABCDTimeSym and f_checkABCDTimeSymmetry(Xbar, Abar, Cbar, Dbar)
+                    filterScore += 5
+        filterScore := math.min(filterScore, 100)
+        int confluenceScore = f_calcConfluenceScore(D, isBullish)
+        // Filter ve confluence esit agirlik
+        int hybridScore = int((filterScore * 0.50) + (confluenceScore * 0.50))
+        hybridScore := math.min(hybridScore, 100)
+        // A+ icin 60+ gerekli
+        string filterQuality = hybridScore >= 60 ? "A+" : (hybridScore >= 45 ? "A" : (hybridScore >= 30 ? "B" : "C"))
+        bool qualityPassed = true
+        if qualityFilterMode == "Sadece A+"
+            qualityPassed := filterQuality == "A+"
+        else if qualityFilterMode == "A+ ve A"
+            qualityPassed := filterQuality == "A+" or filterQuality == "A"
+        else if qualityFilterMode == "A+, A ve B"
+            qualityPassed := filterQuality == "A+" or filterQuality == "A" or filterQuality == "B"
+        bool masterFilterPass = true
+        bool smcNoConfluence = smcFilterMode == "Zorunlu" and not hasSMCConfluence
+        if not isPotential
+            if useAutoPilot
+                int activeFilters = 0
+                int passedFilters = 0
+                if filterTrendActive
+                    activeFilters += 1
+                    if trendOk
+                        passedFilters += 1
+                if filterRVolActive
+                    activeFilters += 1
+                    if rvolOk
+                        passedFilters += 1
+                if filterRSIActive
+                    activeFilters += 1
+                    if rsiValid
+                        passedFilters += 1
+                if useSMCFilter and smcFilterMode != "Kapali"
+                    activeFilters += 1
+                    if hasSMCConfluence
+                        passedFilters += 1
+                int minRequired = math.max(1, math.floor(activeFilters * 0.40)) // %40 baraji
+                masterFilterPass := passedFilters >= minRequired
+                if smcNoConfluence
+                    masterFilterPass := false
+            else
+                if (useTrendFilter) and not trendOk
+                    masterFilterPass := false
+                if useRVolFilter and not rvolOk
+                    masterFilterPass := false
+                if useRSIConfluence and not rsiValid
+                    masterFilterPass := false
+                if rsiDivergenceRequired and not hasDivergence
+                    masterFilterPass := false
+                if smcNoConfluence
+                    masterFilterPass := false
+        color qualityColor = hybridScore >= 75 ? color.rgb(0, 230, 118) : hybridScore >= 55 ? color.rgb(76, 175, 80) : hybridScore >= 35 ? color.rgb(255, 193, 7) : color.rgb(158, 158, 158, 50)
+        // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+        // "SADECE D TEYITLI" FILTRESI - YENI BASITLEÅTIRILMIÅ MANTIK
+        // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+        int barsSinceD = bar_index - Dbar
+        // hideUntouchedPRZ ACIK ve TAMAMLANMIÅ pattern ise:
+        // PRZ'ye degmemis pattern'leri gizle
+        // NOT: Potansiyel formasyonlar pot_showPotential ile ayri kontrol ediliyor
+        bool shouldHideByDFilter = false
+        if hideUntouchedPRZ and not isPotential
+            // Sadece tamamlanmis pattern'ler icin D teyidi kontrolu
+            if not przTouched
+                shouldHideByDFilter := true  // PRZ'ye degmemis = teyit yok = gizle
+        bool scoreTooLow = false
+        if not isPotential
+            int dynamicMinScore = f_getDynamicMinScore(pat, tfMinutes)
+            int effectiveMinScore = dynamicMinScore
+            if hasSMCConfluence
+                effectiveMinScore := int(dynamicMinScore * 0.70)
+            scoreTooLow := hideLowScorePatterns and hybridScore < effectiveMinScore
+        // GECMIÅ PATTERN'LER ICIN TP KONTROLU - SADECE TP'YE ULAÅMIÅLARI GOSTER
+        bool hasReachedTP = true  // Varsayilan true - yeni pattern'ler icin
+        if not isPotential and barsSinceD > 10  // 10 bardan eski pattern'ler icin kontrol
+            hasReachedTP := false
+            [slCheck, tpCheck, entryCheck] = f_calcSmartRisk(pat, isBullish, X, A, C, D, Xbar, Dbar)
+            if not na(tpCheck) and not na(entryCheck)
+                bool entryHit = false
+                // KORUYUCU: Limit TP check to SAFE_TP_CHECK_LIMIT (was 200)
+                int checkLimit = math.min(barsSinceD, SAFE_TP_CHECK_LIMIT)
+                for offset = 0 to checkLimit - 1
+                    int idx = barsSinceD - 1 - offset
+                    if idx >= 0
+                        float h = high[idx]
+                        float l = low[idx]
+                        if isBullish
+                            if not entryHit and l <= entryCheck
+                                entryHit := true
+                            if entryHit and h >= tpCheck
+                                hasReachedTP := true
+                                break
+                        else
+                            if not entryHit and h >= entryCheck
+                                entryHit := true
+                            if entryHit and l <= tpCheck
+                                hasReachedTP := true
+                                break
+        // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+        // PATTERN CIZIM KARARI
+        // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+        bool shouldDrawPattern = false
+        if shouldHideByDFilter
+            // D Teyitli filtresi pattern'i engelliyor
+            shouldDrawPattern := false
+        else if isPotential
+            // Potansiyel pattern gosterilsin (filtre kapali veya gecti)
+            shouldDrawPattern := true
+        else if scoreTooLow or not masterFilterPass or not qualityPassed
+            // Diger filtreler engelledi
+            shouldDrawPattern := false
+        else
+            // Tamamlanmis pattern gosterilsin
+            shouldDrawPattern := true
+        if shouldDrawPattern
+            shouldDraw := true
+            int dir = isBullish ? 1 : -1
+            color patCol = f_getPatternColorInline(pat)
+            color drawCol = patCol
+            string useStyle = line.style_solid
+            if smcNoConfluence
+                drawCol := color.new(patCol, 70)
+                useStyle := line.style_dashed
+            string labelPrefix = (isPotential and barstate.islast) ? (pot_labelPrefix != "" ? pot_labelPrefix + " " : "") : ""
+            if smcNoConfluence and not isPotential
+                labelPrefix := "Â Â "
+            string przQuality = f_calcQualityScore(przT, przB, close)
+            string quality = filterQuality + " (" + str.tostring(filterScore) + ")"
+            // FAIL-SAFE: Check if signal can be emitted (stateless v6 version)
+            bool signalAllowed = f_canEmitSignal(isBullish)
+            bool alertQualityOk = f_shouldAlert(przQuality)
+            if useAlerts and not isPotential and alertQualityOk and signalAllowed and (alertDirection == "Hepsi" or (alertDirection == "Sadece Bullish" and isBullish) or (alertDirection == "Sadece Bearish" and not isBullish))
+                string alertMsg = syminfo.tickerid + " " + timeframe.period + ": " + pat + " [" + quality + "] Detected!"
+                alert(alertMsg, alertSound ? alert.freq_once_per_bar : alert.freq_once_per_bar_close)
+            [slLevel, tp1Level, entryLevel] = f_calcSmartRisk(pat, isBullish, X, A, C, D, Xbar, Dbar)
+            // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+            // KALITE SKORU HESAPLAMA (tamamlanan pattern icin)
+            // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+            float qualityScoreValue = 0.0
+            if not isPotential and shouldDrawPattern
+                // Pattern tamamlandi - kalite skorunu hesapla
+                qualityScoreValue := calculateQualityScore(pat, X, A, B, C, D, Xbar, Abar, Bbar, Cbar, Dbar, isBullish)
+                // NOT: Skor sum guncellemeleri istatistik tracking bolumunde yapilacak
+            if not isPotential and shouldDrawPattern
+                array.unshift(patTypes, pat), array.unshift(patBars, Dbar), array.unshift(patPrzTop, przT)
+                array.unshift(patPrzBot, przB), array.unshift(patBull, isBullish), array.unshift(patEval, false)
+                array.unshift(patTP1, tp1Level), array.unshift(patSL, slLevel), array.unshift(patEntry, entryLevel)
+                array.unshift(patQuality, filterQuality), array.unshift(patFilterPassed, shouldDrawPattern)
+                // Dinamik skor hesaplamasi icin pattern verilerini kaydet
+                array.unshift(patX, X), array.unshift(patA, A), array.unshift(patB, B), array.unshift(patC, C), array.unshift(patD, D)
+                array.unshift(patXbar, Xbar), array.unshift(patAbar, Abar), array.unshift(patBbar, Bbar), array.unshift(patCbar, Cbar), array.unshift(patDbar, Dbar)
+                array.unshift(patIsBull, isBullish)
+                // Kalite skorunu ekle (baslangic icin, sonradan dinamik hesaplanacak)
+                array.unshift(patScores, qualityScoreValue)
+                // NOT: lastXXXBar tracking global scope'ta yapilacak (Pine Script v6 kurali)
+            if showXALine
+                line.new(Xbar, X, Abar, A, color=drawCol, width=lineW, style=useStyle, xloc=xloc.bar_index)
+            if showABLine
+                line.new(Abar, A, Bbar, B, color=drawCol, width=lineW, style=useStyle, xloc=xloc.bar_index)
+            if showBCLine
+                line.new(Bbar, B, Cbar, C, color=drawCol, width=lineW, style=useStyle, xloc=xloc.bar_index)
+            if showCDLine
+                line.new(Cbar, C, Dbar, D, color=drawCol, width=lineW, style=useStyle, xloc=xloc.bar_index)
+            if showXBLine
+                line.new(Xbar, X, Bbar, B, color=drawCol, width=1, style=useStyle, xloc=xloc.bar_index)
+            if showACLine
+                line.new(Abar, A, Cbar, C, color=drawCol, width=1, style=useStyle, xloc=xloc.bar_index)
+            if showBDLine
+                line.new(Bbar, B, Dbar, D, color=drawCol, width=1, style=useStyle, xloc=xloc.bar_index)
+            bool przTouchedLocal = low <= przT and high >= przB
+            bool shouldDrawPRZ = showPRZ and not na(przT) and not na(przB)
+            if hideUntouchedPRZ
+                shouldDrawPRZ := shouldDrawPRZ and przTouchedLocal
+            if shouldDrawPRZ
+                int przEndBar = Dbar + przBars
+                box.new(Dbar, przT, przEndBar, przB, border_color=drawCol, bgcolor=color.new(drawCol, 90), border_width=1, border_style=line.style_solid, xloc=xloc.bar_index)
+            if smcShowZones and hasSMCConfluence and not na(smcZoneTop) and not na(smcZoneBot)
+                int smcEndBar = Dbar + przBars
+                color smcColor = isBullish ? fvgColorBullish : fvgColorBearish
+                box.new(Dbar - 5, smcZoneTop, smcEndBar, smcZoneBot,
+                        border_color=smcColor, bgcolor=smcColor,
+                        border_width=2, border_style=line.style_dashed,
+                        text="gÅŸÃ‚ÂÃ¢â‚¬ÂºÂ " + smcZoneType, text_color=color.white, text_size=size.tiny,
+                        xloc=xloc.bar_index)
+            int labelTransp = 60
+            if showPointX
+                label.new(Xbar, X, "X", style=isBullish ? label.style_label_up : label.style_label_down, color=color.new(drawCol, labelTransp), textcolor=color.white, size=size.tiny, xloc=xloc.bar_index)
+            if showPointA
+                label.new(Abar, A, "A", style=isBullish ? label.style_label_down : label.style_label_up, color=color.new(drawCol, labelTransp), textcolor=color.white, size=size.tiny, xloc=xloc.bar_index)
+            if showPointB
+                label.new(Bbar, B, "B", style=isBullish ? label.style_label_up : label.style_label_down, color=color.new(drawCol, labelTransp), textcolor=color.white, size=size.tiny, xloc=xloc.bar_index)
+            if showPointC
+                label.new(Cbar, C, "C", style=isBullish ? label.style_label_down : label.style_label_up, color=color.new(drawCol, labelTransp), textcolor=color.white, size=size.tiny, xloc=xloc.bar_index)
+            if showPointD
+                float abcRatio = math.abs(C - B) / math.abs(B - A)
+                string abcdComp = f_getABCDComponent(abcRatio, 0)
+                string abcdStr = abcdComp != "" ? " + " + abcdComp : ""
+                string rsiStr = ""
+                string qualityStr = " [" + quality + "]"
+                string dLabel = ""
+                string tooltipText = ""
+                color labelColor = qualityColor
+                if isPotential
+                    string smcPrefix = hasSMCConfluence ? "gÅŸÃ‚ÂÃ¢â‚¬ÂºÂ " : ""
+                    string scoreFeedback = hybridScore >= 70 ? "ÄŸÅ¸â€Â¥" : (hybridScore >= 50 ? "Â¡" : "Â Â")
+                    dLabel := smcPrefix + labelPrefix + pat + " (" + str.tostring(hybridScore) + ") " + scoreFeedback
+                    string potStatus = hybridScore >= 70 ? "Guclu Aday" : (hybridScore >= 50 ? "Aday" : "Zayif Sinyal")
+                    string potRatios = showRatios ? "Oranlar: " + ratioText : ""
+                    string smcInfo = hasSMCConfluence ? "\nÄŸÅ¸â€ºÂ¡Ã¯Â¸Â SMC: " + smcZoneType + " Confluence (+35)" : "\nÃ¢Å¡Â Ã¯Â¸Â SMC: Kesisim yok"
+                    tooltipText := "POTANSIYEL: " + pat + "\n" + potStatus + " | Hibrit Puan: " + str.tostring(hybridScore) + "\n[#] Geometrik: " + str.tostring(filterScore) + " | [>] Confluence: " + str.tostring(confluenceScore) + smcInfo + "\n" + potRatios
+                else
+                    string smcPrefix = hasSMCConfluence ? "ÄŸÅ¸â€ºÂ¡Ã¯Â¸Â " : ""
+                    dLabel := smcPrefix + pat + " (" + str.tostring(hybridScore) + ") | " + filterQuality
+                    string confRatios = showRatios ? "Oranlar: " + ratioText : ""
+                    string smcInfo = hasSMCConfluence ? "\nÄŸÅ¸â€ºÂ¡Ã¯Â¸Â SMC: " + smcZoneType + " Confluence (+35)" : "\nÃ¢Å¡Â Ã¯Â¸Â SMC: Kesisim yok"
+                    // Kalite skorunu tooltip'e ekle (opsiyonel)
+                    string scoreInfo = ""
+                    if i_showScoreInTooltip
+                        string scoreEmoji = qualityScoreValue >= 75 ? "ÄŸÅ¸Å¸Â¢" : qualityScoreValue >= 60 ? "ÄŸÅ¸Å¸Â¡" : qualityScoreValue >= 45 ? "ÄŸÅ¸Å¸Â " : "ÄŸÅ¸â€Â´"
+                        scoreInfo := "\n[>] Kalite Skoru: " + str.tostring(qualityScoreValue, "#.#") + "/100 " + scoreEmoji
+                    tooltipText := pat + " [" + zigLabel + "] | Kalite: " + filterQuality + "\n[#] Geometrik: " + str.tostring(filterScore) + " | [>] Confluence: " + str.tostring(confluenceScore) + " | HIBRIT: " + str.tostring(hybridScore) + smcInfo + scoreInfo + "\n" + confRatios + " | " + rsiStr + "\nEntry: " + str.tostring(entryLevel, "#.##") + " TP: " + str.tostring(tp1Level, "#.##") + " SL: " + str.tostring(slLevel, "#.##")
+                    labelColor := drawCol
+                label.new(Dbar, D, dLabel, tooltip=tooltipText, style=dir > 0 ? label.style_label_up : label.style_label_down, color=labelColor, textcolor=color.white, size=size.small, xloc=xloc.bar_index)
+            if showSmartSL and filterSmartRiskActive and barstate.isconfirmed and Dbar != lastSLTPDbar
+                int lineEndBar = Dbar + smartExtendBars
+                if showEntry
+                    line.new(Dbar, entryLevel, lineEndBar, entryLevel, color=colSmartEntry, width=2, style=line.style_solid, xloc=xloc.bar_index)
+                    label.new(lineEndBar, entryLevel, "Entry: " + str.tostring(entryLevel, "#.#####"), style=label.style_label_left, color=color.new(colSmartEntry, 50), textcolor=color.white, size=size.tiny, xloc=xloc.bar_index)
+                if showTP
+                    line.new(Dbar, tp1Level, lineEndBar, tp1Level, color=colSmartTP, width=1, style=line.style_dashed, xloc=xloc.bar_index)
+                    label.new(lineEndBar, tp1Level, "TP: " + str.tostring(tp1Level, "#.#####"), style=label.style_label_left, color=color.new(colSmartTP, 50), textcolor=color.white, size=size.tiny, xloc=xloc.bar_index)
+                if showSL
+                    line.new(Dbar, slLevel, lineEndBar, slLevel, color=colSmartSL, width=2, style=line.style_solid, xloc=xloc.bar_index)
+                    label.new(lineEndBar, slLevel, "SL: " + str.tostring(slLevel, "#.#####"), style=label.style_label_left, color=color.new(colSmartSL, 50), textcolor=color.white, size=size.tiny, xloc=xloc.bar_index)
+    [shouldDraw, Dbar]
+f_checkABCD(array<float> zP, array<int> zB, array<int> zD) =>
+    string pat = ""
+    float prz_abcd_level = na, float prz_bc_level = na, float prz_alt127 = na, float prz_alt1618 = na
+    string ratioText = ""
+    bool isBullish = false, bool patternFound = false
+    float A = na, float B = na, float C = na, float D = na
+    int Abar = 0, int Bbar = 0, int Cbar = 0, int Dbar = 0
+    if array.size(zP) >= 4 and array.size(zD) >= 4 and (abcdOn or altAbcdOn)
+        int dirD = array.get(zD, 0)
+        int dirC = array.get(zD, 1)
+        int dirB = array.get(zD, 2)
+        int dirA = array.get(zD, 3)
+        if (dirA == dirC) and (dirB == dirD) and (dirA != dirB)
+            D := array.get(zP, 0)
+            Dbar := array.get(zB, 0)
+            C := array.get(zP, 1)
+            Cbar := array.get(zB, 1)
+            B := array.get(zP, 2)
+            Bbar := array.get(zB, 2)
+            A := array.get(zP, 3)
+            Abar := array.get(zB, 3)
+            isBullish := dirA == -1
+            float AB = math.abs(B - A)
+            float BC = math.abs(C - B)
+            float CD = math.abs(D - C)
+            float minSwingSize = filterATRActive ? (atrMultiplierFinal * atrValue * 0.5) : 0.0
+            int patternBars = Dbar - Abar
+            bool minWidthOk = patternBars >= 8
+            if AB > 0 and BC > 0 and AB >= minSwingSize and minWidthOk
+                float cRatio = BC / AB
+                float cdAbRatio = CD / AB
+                // FIX: Add explicit BC > 0 check for bcProjection (already checked above, but defensive)
+                float bcProjection = BC > 0 ? CD / BC : 0
+                bool timeValid = (Abar < Bbar) and (Bbar < Cbar) and (Cbar < Dbar)
+                bool cNotViolated = isBullish ? (C > A) : (C < A)
+                if timeValid and cNotViolated
+                    float dir = isBullish ? -1.0 : 1.0
+                    float cdRatioMin = abcd_ratio * (1 - abcd_errorPct)
+                    float cdRatioMax = abcd_ratio * (1 + abcd_errorPct)
+    int sz = array.size(zP)
+    if sz >= 3
+        for offset = 0 to (sz >= 4 ? 1 : 0)
+            if patternFound
+                break
+            float d_pt = (offset == 0) ? close : array.get(zP, 0)
+            int d_br = (offset == 0) ? bar_index : array.get(zB, 0)
+            float c_pt = array.get(zP, 0 + offset)
+            int c_br = array.get(zB, 0 + offset)
+            float b_pt = array.get(zP, 1 + offset)
+            int b_br = array.get(zB, 1 + offset)
+            float a_pt = array.get(zP, 2 + offset)
+            int a_br = array.get(zB, 2 + offset)
+            bool bull = b_pt < a_pt
+            float ab = math.abs(b_pt - a_pt)
+            float bc = math.abs(c_pt - b_pt)
+            float cd = math.abs(d_pt - c_pt)
+            float c_ratio = ab > 0 ? bc / ab : 0
+            float cd_ab_ratio = ab > 0 ? cd / ab : 0
+            bool c_valid = bull ? (c_pt > b_pt and c_pt < a_pt) : (c_pt < b_pt and c_pt > a_pt)
+            bool d_valid = bull ? (d_pt < c_pt) : (d_pt > c_pt)
+            if c_valid and d_valid and c_ratio >= 0.382 and c_ratio <= 0.886
+                // Swing Validation (OTT Pilot)
+                float ab_size = math.abs(b_pt - a_pt)
+                float min_swing = useAutoPilot ? f_getMinSwingAtr() : 0.0
+                if ab_size >= min_swing
+                    float tol = 0.15
+                    bool isExact = cd_ab_ratio >= 0.85 and cd_ab_ratio <= 1.15
+                    bool isAlt127 = cd_ab_ratio >= 1.15 and cd_ab_ratio <= 1.40
+                    bool isAlt1618 = cd_ab_ratio >= 1.40 and cd_ab_ratio <= 1.85
+                    if isExact or isAlt127 or isAlt1618
+                        patternFound := true
+                        isBullish := bull
+                        A := a_pt
+                        B := b_pt
+                        C := c_pt
+                        D := d_pt
+                        Abar := a_br
+                        Bbar := b_br
+                        Cbar := c_br
+                        Dbar := d_br
+                        pat := isExact ? "AB=CD" : (isAlt127 ? "1.27 AB=CD" : "1.618 AB=CD")
+                        int dir = bull ? -1 : 1
+                        prz_abcd_level := c_pt + dir * (isExact ? 1.0 : (isAlt127 ? 1.27 : 1.618)) * ab
+                        prz_bc_level := c_pt + dir * f_getBcProjection(c_ratio) * bc
+                        ratioText := "C:" + str.tostring(c_ratio, "#.##") + " CD/AB:" + str.tostring(cd_ab_ratio, "#.##")
+    [pat, prz_abcd_level, prz_bc_level, prz_alt127, prz_alt1618, ratioText, isBullish, patternFound, A, B, C, Abar, Bbar, Cbar, D, Dbar]
+f_drawABCDPattern(string pat, float prz_abcd, float prz_bc, float prz_alt127, float prz_alt1618, string ratioText, float A, int Abar, float B, int Bbar, float C, int Cbar, float D, int Dbar, bool isBullish, string zigLabel) =>
+    bool shouldDraw = false
+    if pat != "" and not na(D) and Dbar > 0
+        array<float> levels = array.new<float>()
+        if not na(prz_abcd)
+            array.push(levels, prz_abcd)
+        if not na(prz_bc)
+            array.push(levels, prz_bc)
+        if altAbcdOn
+            if not na(prz_alt127)
+                array.push(levels, prz_alt127)
+            if not na(prz_alt1618)
+                array.push(levels, prz_alt1618)
+        if array.size(levels) >= 1
+            float przT = array.max(levels), float przB = array.min(levels)
+            bool przTouched = f_przTouched(Dbar, przT, przB, D, isBullish)
+            bool trendOk = f_checkTrendAlignment(isBullish, D)
+            bool rvolOk = f_checkRVol(Dbar)
+            int abcdFilterScore = 40
+            abcdFilterScore += trendOk ? 15 : 0
+            abcdFilterScore += rvolOk ? 10 : 0
+            abcdFilterScore := math.min(abcdFilterScore, 100)
+            string abcdFilterQuality = abcdFilterScore >= 75 ? "A+" : (abcdFilterScore >= 55 ? "A" : (abcdFilterScore >= 35 ? "B" : "C"))
+            int barsSinceABCD = bar_index - Dbar
+            bool abcdMatured = barsSinceABCD > przBars
+            bool abcdShouldHide = hideUntouchedPRZ and not przTouched
+            int abcdDynamicMin = f_getDynamicMinScore(pat, tfMinutes)
+            bool abcdScoreTooLow = hideLowScorePatterns and abcdFilterScore < abcdDynamicMin
+            bool abcdMasterFilterPass = true
+            if useAutoPilot
+                int abcdActive = 0
+                int abcdPassed = 0
+                if filterTrendActive
+                    abcdActive += 1
+                    if trendOk
+                        abcdPassed += 1
+                if filterRVolActive
+                    abcdActive += 1
+                    if rvolOk
+                        abcdPassed += 1
+                int abcdMinReq = math.max(1, math.floor(abcdActive * 0.50))
+                abcdMasterFilterPass := abcdPassed >= abcdMinReq
+            else
+                if (useTrendFilter) and not trendOk
+                    abcdMasterFilterPass := false
+                if useRVolFilter and not rvolOk
+                    abcdMasterFilterPass := false
+            bool abcdQualityPassed = true
+            if qualityFilterMode == "Sadece A+"
+                abcdQualityPassed := abcdFilterQuality == "A+"
+            else if qualityFilterMode == "A+ ve A"
+                abcdQualityPassed := abcdFilterQuality == "A+" or abcdFilterQuality == "A"
+            else if qualityFilterMode == "A+, A ve B"
+                abcdQualityPassed := abcdFilterQuality == "A+" or abcdFilterQuality == "A" or abcdFilterQuality == "B"
+            if not abcdShouldHide and not abcdScoreTooLow and abcdMasterFilterPass and abcdQualityPassed
+                shouldDraw := true
+                int dir = isBullish ? 1 : -1
+                color patCol = f_getPatternColorInline(pat)
+                color abcdDrawCol = patCol
+                [slLevel, tp1Level, entryLevel] = f_calcSmartRisk(pat, isBullish, A, A, C, D, Abar, Dbar)
+                string quality = abcdFilterQuality + " (" + str.tostring(abcdFilterScore) + ")"
+                if not na(pat)
+                    array.unshift(patTypes, pat), array.unshift(patBars, Dbar), array.unshift(patPrzTop, przT), array.unshift(patPrzBot, przB)
+                    array.unshift(patBull, isBullish), array.unshift(patEval, false)
+                    array.unshift(patTP1, tp1Level), array.unshift(patSL, slLevel), array.unshift(patEntry, entryLevel)
+                    array.unshift(patQuality, abcdFilterQuality), array.unshift(patFilterPassed, shouldDraw)
+                    // Dinamik skor hesaplamasi icin pattern verilerini kaydet (AB=CD icin)
+                    array.unshift(patX, A), array.unshift(patA, A), array.unshift(patB, B), array.unshift(patC, C), array.unshift(patD, D)
+                    array.unshift(patXbar, Abar), array.unshift(patAbar, Abar), array.unshift(patBbar, Bbar), array.unshift(patCbar, Cbar), array.unshift(patDbar, Dbar)
+                    array.unshift(patIsBull, isBullish)
+                    array.unshift(patScores, abcdFilterScore)
+                if showABLine
+                    line.new(Abar, A, Bbar, B, color=abcdDrawCol, width=lineW, xloc=xloc.bar_index)
+                if showBCLine
+                    line.new(Bbar, B, Cbar, C, color=abcdDrawCol, width=lineW, xloc=xloc.bar_index)
+                if showCDLine
+                    line.new(Cbar, C, Dbar, D, color=abcdDrawCol, width=lineW, xloc=xloc.bar_index)
+                if showACLine
+                    line.new(Abar, A, Cbar, C, color=abcdDrawCol, width=1, xloc=xloc.bar_index)
+                if showBDLine
+                    line.new(Bbar, B, Dbar, D, color=abcdDrawCol, width=1, xloc=xloc.bar_index)
+                if showPointA
+                    label.new(Abar, A, "A", style=isBullish ? label.style_label_up : label.style_label_down, color=color.new(abcdDrawCol, 60), textcolor=color.white, size=size.tiny, xloc=xloc.bar_index)
+                if showPointB
+                    label.new(Bbar, B, "B", style=isBullish ? label.style_label_down : label.style_label_up, color=color.new(abcdDrawCol, 60), textcolor=color.white, size=size.tiny, xloc=xloc.bar_index)
+                if showPointC
+                    label.new(Cbar, C, "C", style=isBullish ? label.style_label_up : label.style_label_down, color=color.new(abcdDrawCol, 60), textcolor=color.white, size=size.tiny, xloc=xloc.bar_index)
+                if showPointD
+                    string abcdLabel = pat + " (" + str.tostring(abcdFilterScore) + ") | " + abcdFilterQuality
+                    string abcdRatios = showRatios ? "Oranlar: " + ratioText : ""
+                    string abcdTooltip = pat + " [" + zigLabel + "] | Kalite: " + quality + " | " + abcdRatios + " | Entry: " + str.tostring(entryLevel, "#.##") + " TP1: " + str.tostring(tp1Level, "#.##") + " SL: " + str.tostring(slLevel, "#.##")
+                    label.new(Dbar, D, abcdLabel, tooltip=abcdTooltip, style=dir > 0 ? label.style_label_up : label.style_label_down, color=abcdDrawCol, textcolor=color.white, size=size.small, xloc=xloc.bar_index)
+    shouldDraw
+var int gartT = 0, var int batT = 0, var int bflyT = 0, var int sharkT = 0, var int cyphT = 0
+var int lastPat1 = 0, var int lastPat2 = 0, var int lastPat3 = 0, var int lastPat4 = 0
+var int lastAbcd1 = 0, var int lastAbcd2 = 0, var int lastAbcd3 = 0, var int lastAbcd4 = 0
+var int lastPot1 = 0, var int lastPot2 = 0, var int lastPot3 = 0, var int lastPot4 = 0
+var bool bPointBullishAlert = false
+var bool bPointBearishAlert = false
+bPointBullishAlert := false
+bPointBearishAlert := false
+var int lastGlobalPatternBar = 0
+var int lastGlobalXBar = 0
+int MIN_PATTERN_DISTANCE = 5
+var int gartW = 0, var int gartL = 0, var int batW = 0, var int batL = 0
+var int bflyW = 0, var int bflyL = 0, var int sharkW = 0, var int sharkL = 0
+var int cyphW = 0, var int cyphL = 0
+var int[] hl_XBars = array.new<int>(0)
+var int[] hl_DBars = array.new<int>(0)
+var int[] hl_Scores = array.new<int>(0)
+var string[] hl_Names = array.new<string>(0)
+int HL_PROXIMITY = 15 
+f_getPatternPriority(string pat) =>
+    int priority = 0
+    if pat == "Gartley"
+        priority := 100
+    else if pat == "Bat"
+        priority := 90
+    else if pat == "Cypher"
+        priority := 80
+    else if pat == "Butterfly"
+        priority := 70
+    else if pat == "Shark"
+        priority := 60
+    else if str.contains(pat, "AB=CD")
+        priority := 50
+    priority
+f_highlanderCheck(int xBar, int dBar, int score, string patName) =>
+    bool canDraw = true
+    int existingIdx = -1
+    int hlSize = array.size(hl_XBars)
+    bool isCramped = hlSize >= maxPatternsVisible
+    // KORUYUCU: Limit array size to maxPatternsVisible + SAFE_HIGHLANDER_CHECK
+    // This prevents unbounded growth while allowing proper overlap checking
+    if hlSize > maxPatternsVisible + SAFE_HIGHLANDER_CHECK
+        // Remove oldest entries beyond the limit
+        int removeCount = hlSize - (maxPatternsVisible + SAFE_HIGHLANDER_CHECK)
+        for i = 0 to removeCount - 1
+            if array.size(hl_XBars) > 0
+                array.shift(hl_XBars)
+                array.shift(hl_DBars)
+                array.shift(hl_Scores)
+                array.shift(hl_Names)
+        hlSize := array.size(hl_XBars)
+    // KORUYUCU: Early exit for empty array - push directly
+    if hlSize == 0
+        if not isCramped
+            array.push(hl_XBars, xBar)
+            array.push(hl_DBars, dBar)
+            array.push(hl_Scores, score)
+            array.push(hl_Names, patName)
+        canDraw := true
+    else
+        // CHECK ENTIRE ARRAY (not just SAFE_HIGHLANDER_CHECK) to avoid missed overlaps
+        for i = 0 to hlSize - 1
+            int storedX = array.get(hl_XBars, i)
+            int storedD = array.get(hl_DBars, i)
+            string storedName = array.get(hl_Names, i)
+            bool sameArea = math.abs(xBar - storedX) <= HL_PROXIMITY and math.abs(dBar - storedD) <= HL_PROXIMITY
+            if sameArea
+                int storedScore = array.get(hl_Scores, i)
+                int myTotal = score + f_getPatternPriority(patName)
+                int storedTotal = storedScore + f_getPatternPriority(storedName)
+                if myTotal <= storedTotal
+                    canDraw := false
+                else
+                    existingIdx := i
+                break
+        if canDraw and preventOverlap and existingIdx < 0
+            for i = 0 to hlSize - 1
+                int storedD = array.get(hl_DBars, i)
+                if math.abs(dBar - storedD) < 30
+                    canDraw := false
+                    break
+        if canDraw and existingIdx >= 0
+            array.set(hl_XBars, existingIdx, xBar)
+            array.set(hl_DBars, existingIdx, dBar)
+            array.set(hl_Scores, existingIdx, score)
+            array.set(hl_Names, existingIdx, patName)
+        else if canDraw and existingIdx < 0
+            if isCramped
+                canDraw := false
+            else
+                array.push(hl_XBars, xBar)
+                array.push(hl_DBars, dBar)
+                array.push(hl_Scores, score)
+                array.push(hl_Names, patName)
+    canDraw
+if barstate.isfirst
+    array.clear(hl_XBars)
+    array.clear(hl_DBars)
+    array.clear(hl_Scores)
+    array.clear(hl_Names)
+var float[] zP1 = array.new<float>(0), var int[] zB1 = array.new<int>(0), var int[] zD1 = array.new<int>(0), var int pDir1 = 0
+var float[] zP2 = array.new<float>(0), var int[] zB2 = array.new<int>(0), var int[] zD2 = array.new<int>(0), var int pDir2 = 0
+var float[] zP3 = array.new<float>(0), var int[] zB3 = array.new<int>(0), var int[] zD3 = array.new<int>(0), var int pDir3 = 0
+var float[] zP4 = array.new<float>(0), var int[] zB4 = array.new<int>(0), var int[] zD4 = array.new<int>(0), var int pDir4 = 0
+if zig1On
+    pDir1 := f_updateZigZag(zP1, zB1, zD1, zigLen1Final, pDir1)
+if zig2On
+    pDir2 := f_updateZigZag(zP2, zB2, zD2, zigLen2Final, pDir2)
+if zig3On
+    pDir3 := f_updateZigZag(zP3, zB3, zD3, zigLen3Final, pDir3)
+if zig4On
+    pDir4 := f_updateZigZag(zP4, zB4, zD4, zigLen4Final, pDir4)
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+// âš ï¸ L1-L4 DUPLICATE CODE BLOCK: Changes must be replicated in ALL 4 sections (L1, L2, L3, L4)
+// âš ï¸ REPAINTING Ã–NLEME: Breakout pattern'leri sadece bar kapandÄ±ÄŸÄ±nda Ã§izilir
+// Search for: "L1-L4 DUPLICATE CODE BLOCK" to find all instances
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+if barstate.isconfirmed and zig1On and array.size(zP1) >= 3
+    [pat1, xa1, bc1, abcd1, ba1, ratio1, bull1, triggered1, X1, A1, B1, C1, Xb1, Ab1, Bb1, Cb1] = f_checkInstantBreakout(zP1, zB1, zD1)
+    if triggered1 and pat1 != "" and Xb1 != lastPat1
+        if pat1 == "Gartley"
+            gartT += 1
+        else if pat1 == "Bat"
+            batT += 1
+        else if pat1 == "Butterfly"
+            bflyT += 1
+        else if pat1 == "Shark"
+            sharkT += 1
+        else if pat1 == "Cypher"
+            cyphT += 1
+        [drawn1, drawnDbar1] = f_drawBreakoutPattern(pat1, xa1, bc1, abcd1, ba1, ratio1, X1, Xb1, A1, Ab1, B1, Bb1, C1, Cb1, bull1, "L1", bar_index)
+        if drawn1
+            if drawnDbar1 != lastSLTPDbar
+                lastSLTPDbar := drawnDbar1
+            lastPat1 := Xb1
+            lastGlobalPatternBar := bar_index
+            lastGlobalXBar := Xb1
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// L1 ABCD CHECK (1 of 4) - See L1-L4 DUPLICATE CODE BLOCK warning above
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+if barstate.isconfirmed and zig1On and array.size(zP1) >= 4 and (abcdOn or altAbcdOn)
+    [abcdPat1, abcdLvl1, bcLvl1, alt127_1, alt1618_1, abcdRatio1, abcdBull1, abcdFound1, abcdA1, abcdB1, abcdC1, abcdAb1, abcdBb1, abcdCb1, abcdD1, abcdDb1] = f_checkABCD(zP1, zB1, zD1)
+    if abcdFound1 and abcdPat1 != "" and abcdDb1 != lastAbcd1
+        if f_drawABCDPattern(abcdPat1, abcdLvl1, bcLvl1, alt127_1, alt1618_1, abcdRatio1, abcdA1, abcdAb1, abcdB1, abcdBb1, abcdC1, abcdCb1, abcdD1, abcdDb1, abcdBull1, "L1")
+            lastAbcd1 := abcdDb1
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// L2 BREAKOUT CHECK (2 of 4) - See L1-L4 DUPLICATE CODE BLOCK warning above
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+if barstate.isconfirmed and zig2On and array.size(zP2) >= 3
+    [pat2, xa2, bc2, abcd2, ba2, ratio2, bull2, triggered2, X2, A2, B2, C2, Xb2, Ab2, Bb2, Cb2] = f_checkInstantBreakout(zP2, zB2, zD2)
+    if triggered2 and pat2 != "" and Xb2 != lastPat2
+        if pat2 == "Gartley"
+            gartT += 1
+        else if pat2 == "Bat"
+            batT += 1
+        else if pat2 == "Butterfly"
+            bflyT += 1
+        else if pat2 == "Shark"
+            sharkT += 1
+        else if pat2 == "Cypher"
+            cyphT += 1
+        [drawn2, drawnDbar2] = f_drawBreakoutPattern(pat2, xa2, bc2, abcd2, ba2, ratio2, X2, Xb2, A2, Ab2, B2, Bb2, C2, Cb2, bull2, "L2", bar_index)
+        if drawn2
+            if drawnDbar2 != lastSLTPDbar
+                lastSLTPDbar := drawnDbar2
+            lastPat2 := Xb2
+            lastGlobalPatternBar := bar_index
+            lastGlobalXBar := Xb2
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// L2 ABCD CHECK (2 of 4) - See L1-L4 DUPLICATE CODE BLOCK warning above
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+if barstate.isconfirmed and zig2On and array.size(zP2) >= 4 and (abcdOn or altAbcdOn)
+    [abcdPat2, abcdLvl2, bcLvl2, alt127_2, alt1618_2, abcdRatio2, abcdBull2, abcdFound2, abcdA2, abcdB2, abcdC2, abcdAb2, abcdBb2, abcdCb2, abcdD2, abcdDb2] = f_checkABCD(zP2, zB2, zD2)
+    if abcdFound2 and abcdPat2 != "" and abcdDb2 != lastAbcd2
+        if f_drawABCDPattern(abcdPat2, abcdLvl2, bcLvl2, alt127_2, alt1618_2, abcdRatio2, abcdA2, abcdAb2, abcdB2, abcdBb2, abcdC2, abcdCb2, abcdD2, abcdDb2, abcdBull2, "L2")
+            lastAbcd2 := abcdDb2
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// L3 BREAKOUT CHECK (3 of 4) - See L1-L4 DUPLICATE CODE BLOCK warning above
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+if barstate.isconfirmed and zig3On and array.size(zP3) >= 3
+    [pat3, xa3, bc3, abcd3, ba3, ratio3, bull3, triggered3, X3, A3, B3, C3, Xb3, Ab3, Bb3, Cb3] = f_checkInstantBreakout(zP3, zB3, zD3)
+    if triggered3 and pat3 != "" and Xb3 != lastPat3
+        if pat3 == "Gartley"
+            gartT += 1
+        else if pat3 == "Bat"
+            batT += 1
+        else if pat3 == "Butterfly"
+            bflyT += 1
+        else if pat3 == "Shark"
+            sharkT += 1
+        else if pat3 == "Cypher"
+            cyphT += 1
+        [drawn3, drawnDbar3] = f_drawBreakoutPattern(pat3, xa3, bc3, abcd3, ba3, ratio3, X3, Xb3, A3, Ab3, B3, Bb3, C3, Cb3, bull3, "L3", bar_index)
+        if drawn3
+            if drawnDbar3 != lastSLTPDbar
+                lastSLTPDbar := drawnDbar3
+            lastPat3 := Xb3
+            lastGlobalPatternBar := bar_index
+            lastGlobalXBar := Xb3
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// L3 ABCD CHECK (3 of 4) - See L1-L4 DUPLICATE CODE BLOCK warning above
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+if barstate.isconfirmed and zig3On and array.size(zP3) >= 4 and (abcdOn or altAbcdOn)
+    [abcdPat3, abcdLvl3, bcLvl3, alt127_3, alt1618_3, abcdRatio3, abcdBull3, abcdFound3, abcdA3, abcdB3, abcdC3, abcdAb3, abcdBb3, abcdCb3, abcdD3, abcdDb3] = f_checkABCD(zP3, zB3, zD3)
+    if abcdFound3 and abcdPat3 != "" and abcdDb3 != lastAbcd3
+        if f_drawABCDPattern(abcdPat3, abcdLvl3, bcLvl3, alt127_3, alt1618_3, abcdRatio3, abcdA3, abcdAb3, abcdB3, abcdBb3, abcdC3, abcdCb3, abcdD3, abcdDb3, abcdBull3, "L3")
+            lastAbcd3 := abcdDb3
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// L4 BREAKOUT CHECK (4 of 4) - See L1-L4 DUPLICATE CODE BLOCK warning above
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+if barstate.isconfirmed and zig4On and array.size(zP4) >= 3
+    [pat4, xa4, bc4, abcd4, ba4, ratio4, bull4, triggered4, X4, A4, B4, C4, Xb4, Ab4, Bb4, Cb4] = f_checkInstantBreakout(zP4, zB4, zD4)
+    if triggered4 and pat4 != "" and Xb4 != lastPat4
+        if pat4 == "Gartley"
+            gartT += 1
+        else if pat4 == "Bat"
+            batT += 1
+        else if pat4 == "Butterfly"
+            bflyT += 1
+        else if pat4 == "Shark"
+            sharkT += 1
+        else if pat4 == "Cypher"
+            cyphT += 1
+        [drawn4, drawnDbar4] = f_drawBreakoutPattern(pat4, xa4, bc4, abcd4, ba4, ratio4, X4, Xb4, A4, Ab4, B4, Bb4, C4, Cb4, bull4, "L4", bar_index)
+        if drawn4
+            if drawnDbar4 != lastSLTPDbar
+                lastSLTPDbar := drawnDbar4
+            lastPat4 := Xb4
+            lastGlobalPatternBar := bar_index
+            lastGlobalXBar := Xb4
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// L4 ABCD CHECK (4 of 4) - See L1-L4 DUPLICATE CODE BLOCK warning above
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+if barstate.isconfirmed and zig4On and array.size(zP4) >= 4 and (abcdOn or altAbcdOn)
+    [abcdPat4, abcdLvl4, bcLvl4, alt127_4, alt1618_4, abcdRatio4, abcdBull4, abcdFound4, abcdA4, abcdB4, abcdC4, abcdAb4, abcdBb4, abcdCb4, abcdD4, abcdDb4] = f_checkABCD(zP4, zB4, zD4)
+    if abcdFound4 and abcdPat4 != "" and abcdDb4 != lastAbcd4
+        if f_drawABCDPattern(abcdPat4, abcdLvl4, bcLvl4, alt127_4, alt1618_4, abcdRatio4, abcdA4, abcdAb4, abcdB4, abcdBb4, abcdC4, abcdCb4, abcdD4, abcdDb4, abcdBull4, "L4")
+            lastAbcd4 := abcdDb4
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+// âš ï¸ P1-P4 POTENTIAL PATTERN DUPLICATE CODE: Changes must be replicated in ALL 4 sections
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+if pot_showPotential and barstate.islast and zig1On and array.size(zP1) >= 3
+    [pot1Pat, pot1Xa, pot1Bc, pot1Abcd, pot1Ba, pot1Ratio, pot1Bull, pot1Trig, pot1X, pot1A, pot1B, pot1C, pot1Xb, pot1Ab, pot1Bb, pot1Cb] = pot_checkPotentialWithConfirmedB(zP1, zB1, zD1)
+    if pot1Trig and pot1Pat != "" and pot1Xb != lastPot1
+        [potDrawn1, _] = f_drawBreakoutPattern(pot1Pat, pot1Xa, pot1Bc, pot1Abcd, pot1Ba, pot1Ratio, pot1X, pot1Xb, pot1A, pot1Ab, pot1B, pot1Bb, pot1C, pot1Cb, pot1Bull, "P1", bar_index, true)
+        if potDrawn1
+            lastPot1 := pot1Xb
+            if pot1Bull
+                bPointBullishAlert := true
+            else
+                bPointBearishAlert := true
+// P2 POTENTIAL PATTERN (2 of 4) - See P1-P4 warning above
+if pot_showPotential and barstate.islast and zig2On and array.size(zP2) >= 3
+    [pot2Pat, pot2Xa, pot2Bc, pot2Abcd, pot2Ba, pot2Ratio, pot2Bull, pot2Trig, pot2X, pot2A, pot2B, pot2C, pot2Xb, pot2Ab, pot2Bb, pot2Cb] = pot_checkPotentialWithConfirmedB(zP2, zB2, zD2)
+    if pot2Trig and pot2Pat != "" and pot2Xb != lastPot2
+        [potDrawn2, _] = f_drawBreakoutPattern(pot2Pat, pot2Xa, pot2Bc, pot2Abcd, pot2Ba, pot2Ratio, pot2X, pot2Xb, pot2A, pot2Ab, pot2B, pot2Bb, pot2C, pot2Cb, pot2Bull, "P2", bar_index, true)
+        if potDrawn2
+            lastPot2 := pot2Xb
+            if pot2Bull
+                bPointBullishAlert := true
+            else
+                bPointBearishAlert := true
+// P3 POTENTIAL PATTERN (3 of 4) - See P1-P4 warning above
+if pot_showPotential and barstate.islast and zig3On and array.size(zP3) >= 3
+    [pot3Pat, pot3Xa, pot3Bc, pot3Abcd, pot3Ba, pot3Ratio, pot3Bull, pot3Trig, pot3X, pot3A, pot3B, pot3C, pot3Xb, pot3Ab, pot3Bb, pot3Cb] = pot_checkPotentialWithConfirmedB(zP3, zB3, zD3)
+    if pot3Trig and pot3Pat != "" and pot3Xb != lastPot3
+        [potDrawn3, _] = f_drawBreakoutPattern(pot3Pat, pot3Xa, pot3Bc, pot3Abcd, pot3Ba, pot3Ratio, pot3X, pot3Xb, pot3A, pot3Ab, pot3B, pot3Bb, pot3C, pot3Cb, pot3Bull, "P3", bar_index, true)
+        if potDrawn3
+            lastPot3 := pot3Xb
+            if pot3Bull
+                bPointBullishAlert := true
+            else
+                bPointBearishAlert := true
+// P4 POTENTIAL PATTERN (4 of 4) - See P1-P4 warning above
+if pot_showPotential and barstate.islast and zig4On and array.size(zP4) >= 3
+    [pot4Pat, pot4Xa, pot4Bc, pot4Abcd, pot4Ba, pot4Ratio, pot4Bull, pot4Trig, pot4X, pot4A, pot4B, pot4C, pot4Xb, pot4Ab, pot4Bb, pot4Cb] = pot_checkPotentialWithConfirmedB(zP4, zB4, zD4)
+    if pot4Trig and pot4Pat != "" and pot4Xb != lastPot4
+        [potDrawn4, _] = f_drawBreakoutPattern(pot4Pat, pot4Xa, pot4Bc, pot4Abcd, pot4Ba, pot4Ratio, pot4X, pot4Xb, pot4A, pot4Ab, pot4B, pot4Bb, pot4C, pot4Cb, pot4Bull, "P4", bar_index, true)
+        if potDrawn4
+            lastPot4 := pot4Xb
+            if pot4Bull
+                bPointBullishAlert := true
+            else
+                bPointBearishAlert := true
+int statsTimeoutBars = 200
+// OPTIMIZED: Limit pattern evaluation check to prevent timeout on large arrays
+int maxPatternsToEvaluate = 20
+int patternsEvaluated = 0
+if array.size(patTypes) > 0
+    for i = array.size(patTypes) - 1 to 0
+        // OPTIMIZED: Early exit after max patterns to prevent timeout
+        if patternsEvaluated >= maxPatternsToEvaluate
+            break
+        if not array.get(patEval, i)
+            patternsEvaluated += 1
+            int pBar = array.get(patBars, i)
+            int barsSinceEntry = bar_index - pBar
+            if barsSinceEntry >= 1
+                string pType = array.get(patTypes, i)
+                bool isBull = array.get(patBull, i)
+                float tp1Level = array.get(patTP1, i)
+                float slLevel = array.get(patSL, i)
+                float entryLevel = array.get(patEntry, i)
+                string pQuality = array.get(patQuality, i)
+                if barsSinceEntry > statsTimeoutBars
+                    array.set(patEval, i, true)
+                    continue
+                bool hitTP1 = false
+                bool hitSL = false
+                bool bothHitSameBar = false
+                bool entryHit = false
+                if na(tp1Level) or na(slLevel) or na(entryLevel)
+                    array.set(patEval, i, true)
+                    continue
+                // OPTIMIZED: Limit inner loop to SAFE_TP_CHECK_LIMIT (30 bars)
+                int checkLimit = math.min(barsSinceEntry, SAFE_TP_CHECK_LIMIT)
+                for j = 1 to checkLimit
+                    int lookback = barsSinceEntry - j
+                    if lookback >= 0
+                        float h = high[lookback]
+                        float l = low[lookback]
+                        if isBull
+                            if not entryHit and l <= entryLevel
+                                entryHit := true
+                            if entryHit
+                                bool tpHitThisBar = h >= tp1Level
+                                bool slHitThisBar = l <= slLevel
+                                if tpHitThisBar and slHitThisBar
+                                    float o = open[barsSinceEntry - j]
+                                    float c = close[barsSinceEntry - j]
+                                    if c > o
+                                        hitTP1 := true
+                                    else
+                                        hitSL := true
+                                    break
+                                if tpHitThisBar
+                                    hitTP1 := true
+                                    break
+                                if slHitThisBar
+                                    hitSL := true
+                                    array.set(patEval, i, true)
+                                    break
+                        else
+                            if not entryHit and h >= entryLevel
+                                entryHit := true
+                            if entryHit
+                                bool tpHitThisBar = l <= tp1Level
+                                bool slHitThisBar = h >= slLevel
+                                if tpHitThisBar and slHitThisBar
+                                    float o = open[barsSinceEntry - j]
+                                    float c = close[barsSinceEntry - j]
+                                    if c < o
+                                        hitTP1 := true
+                                    else
+                                        hitSL := true
+                                    break
+                                if tpHitThisBar
+                                    hitTP1 := true
+                                    break
+                                if slHitThisBar
+                                    hitSL := true
+                                    array.set(patEval, i, true)
+                                    break
+                if hitTP1 or hitSL
+                    bool win = hitTP1
+                    bool isHighWRPattern = (pType == "Bat" or pType == "Cypher")
+                    // FILTREYI GECEN PATTERN'LER ISTATISTIÄE DAHIL
+                    bool filterPassed = array.get(patFilterPassed, i)
+                    // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+                    // KALITE SKORU HESAPLAMA VE FILTRELENMIÅ ISTATISTIK
+                    // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+                    // DINAMIK SKOR HESAPLAMA - Yeni filtreler gecmis pattern'leri de etkiler
+                    float patternScore = 0.0
+                    bool hasPatternData = array.size(patX) > i and array.size(patA) > i and array.size(patB) > i and array.size(patC) > i and array.size(patD) > i
+                    bool hasBarData = array.size(patXbar) > i and array.size(patAbar) > i and array.size(patBbar) > i and array.size(patCbar) > i and array.size(patDbar) > i
+                    bool hasBullData = array.size(patIsBull) > i
+                    if hasPatternData and hasBarData and hasBullData
+                        // Kaydedilen pattern verileriyle skoru ANLIK filtrelerle yeniden hesapla
+                        float pX = array.get(patX, i)
+                        float pA = array.get(patA, i)
+                        float pB = array.get(patB, i)
+                        float pC = array.get(patC, i)
+                        float pD = array.get(patD, i)
+                        int pXbar = array.get(patXbar, i)
+                        int pAbar = array.get(patAbar, i)
+                        int pBbar = array.get(patBbar, i)
+                        int pCbar = array.get(patCbar, i)
+                        int pDbar = array.get(patDbar, i)
+                        bool pIsBull = array.get(patIsBull, i)
+                        // Mevcut filtre ayarlariyla skoru yeniden hesapla
+                        patternScore := calculateQualityScore(pType, pX, pA, pB, pC, pD, pXbar, pAbar, pBbar, pCbar, pDbar, pIsBull)
+                    else
+                        // Eski pattern'ler icin veri yoksa, kayitli skoru kullan
+                        patternScore := array.size(patScores) > i ? array.get(patScores, i) : 0.0
+                    // Timeframe bazli minimum esik
+                    int minScoreThreshold = i_useAutoThreshold ? f_getMinScoreByTF() : i_manualThreshold
+                    // Filtreleme mantigi:
+                    // ACIK: Sadece skoru yuksek olanlari dahil et
+                    // KAPALI: Tum pattern'leri dahil et (filtre yok)
+                    bool includeInFiltered = i_enableFiltering ? (patternScore >= minScoreThreshold) : true
+                    // GENEL ISTATISTIK - Tum pattern'ler W/L sayilir (filtre ayarindan bagimsiz)
+                    if pType == "Gartley"
+                        if win
+                            gartW += 1
+                        else
+                            gartL += 1
+                    else if pType == "Bat"
+                        if win
+                            batW += 1
+                        else
+                            batL += 1
+                    else if pType == "Butterfly"
+                        if win
+                            bflyW += 1
+                        else
+                            bflyL += 1
+                    else if pType == "Shark"
+                        if win
+                            sharkW += 1
+                        else
+                            sharkL += 1
+                    else if pType == "Cypher"
+                        if win
+                            cyphW += 1
+                        else
+                            cyphL += 1
+                    // FILTRELENMIÅ ISTATISTIK - Sadece filtre gecenler
+                    if includeInFiltered and filterPassed
+                        if pType == "Gartley"
+                            if win
+                                gartW_filtered += 1
+                            else
+                                gartL_filtered += 1
+                        else if pType == "Bat"
+                            if win
+                                batW_filtered += 1
+                            else
+                                batL_filtered += 1
+                        else if pType == "Butterfly"
+                            if win
+                                bflyW_filtered += 1
+                            else
+                                bflyL_filtered += 1
+                        else if pType == "Shark"
+                            if win
+                                sharkW_filtered += 1
+                            else
+                                sharkL_filtered += 1
+                        else if pType == "Cypher"
+                            if win
+                                cyphW_filtered += 1
+                            else
+                                cyphL_filtered += 1
+                    // YENI: SKOR SUM GUNCELLEMELER (pattern tamamlandiginda)
+                    // Bu bolum global scope'ta oldugu icin guvenli
+                    // patternScore degiskeni zaten yukarida (satir 2535) array'den alindi
+                    if filterPassed and patternScore > 0
+                        if pType == "Gartley"
+                            gartScoreSum := gartScoreSum + patternScore
+                            gartScoreCount := gartScoreCount + 1
+                        else if pType == "Bat"
+                            batScoreSum := batScoreSum + patternScore
+                            batScoreCount := batScoreCount + 1
+                        else if pType == "Butterfly"
+                            bflyScoreSum := bflyScoreSum + patternScore
+                            bflyScoreCount := bflyScoreCount + 1
+                        else if pType == "Shark"
+                            sharkScoreSum := sharkScoreSum + patternScore
+                            sharkScoreCount := sharkScoreCount + 1
+                        else if pType == "Cypher"
+                            cyphScoreSum := cyphScoreSum + patternScore
+                            cyphScoreCount := cyphScoreCount + 1
+                    array.set(patEval, i, true)
+    if array.size(patTypes) > 50
+        array.pop(patTypes), array.pop(patBars), array.pop(patPrzTop), array.pop(patPrzBot)
+        array.pop(patBull), array.pop(patEval), array.pop(patTP1), array.pop(patSL), array.pop(patEntry)
+        array.pop(patQuality), array.pop(patFilterPassed)
+        // Dinamik skor array'lerini de temizle
+        if array.size(patScores) > 0
+            array.pop(patScores)
+        if array.size(patX) > 0
+            array.pop(patX), array.pop(patA), array.pop(patB), array.pop(patC), array.pop(patD)
+        if array.size(patXbar) > 0
+            array.pop(patXbar), array.pop(patAbar), array.pop(patBbar), array.pop(patCbar), array.pop(patDbar)
+        if array.size(patIsBull) > 0
+            array.pop(patIsBull)
+f_getTablePosition() =>
+    if tablePosition == "Sol Alt"
+        position.bottom_left
+    else if tablePosition == "Sag Alt"
+        position.bottom_right
+    else if tablePosition == "Sol Ust"
+        position.top_left
+    else
+        position.top_right
+var table tbl = na
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+// TABLE OPTIMIZATION: Only create table once, reuse across bars (performance fix)
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+if showTable and na(tbl)
+    // Sutun sayisini kompakt/tam moduna gore ayarla
+    int numCols = i_compactStats ? 3 : 8
+    tbl := table.new(f_getTablePosition(), numCols, 7, bgcolor=color.new(#1a1a2e, 10), border_width=1)
+f_rate(int w, int l) => w + l > 0 ? str.tostring(math.round(w * 100.0 / (w + l))) + "%" : "-"
+f_tblRow(table t, int r, string n, color c, bool on, int tot, int w, int l, int totF, int wF, int lF, int avg, bool compact) =>
+    color tc = on ? c : color.gray
+    if compact
+        table.cell(t, 0, r, n, text_color=tc, text_size=size.small)
+        table.cell(t, 1, r, str.tostring(totF), text_color=color.white, text_size=size.small)
+        table.cell(t, 2, r, on ? f_rate(wF, lF) : "-", text_color=color.yellow, text_size=size.small)
+    else
+        table.cell(t, 0, r, n, text_color=tc, text_size=size.small)
+        table.cell(t, 1, r, str.tostring(tot), text_color=color.white, text_size=size.small)
+        table.cell(t, 2, r, str.tostring(w), text_color=C_WIN, text_size=size.small)
+        table.cell(t, 3, r, str.tostring(l), text_color=C_LOSS, text_size=size.small)
+        table.cell(t, 4, r, on ? f_rate(w, l) : "-", text_color=color.yellow, text_size=size.small)
+        table.cell(t, 5, r, str.tostring(totF), text_color=color.white, text_size=size.small)
+        table.cell(t, 6, r, on ? f_rate(wF, lF) : "-", text_color=C_WIN, text_size=size.small)
+        table.cell(t, 7, r, on ? str.tostring(avg) : "-", text_color=C_SCORE, text_size=size.small)
+f_tblTotal(table t, int r, int tot, int w, int l, int totF, int wF, int lF, int avg, bool compact) =>
+    if compact
+        table.cell(t, 0, r, "TOPLAM", text_color=color.yellow, text_size=size.small, bgcolor=C_BG)
+        table.cell(t, 1, r, str.tostring(totF), text_color=color.yellow, text_size=size.small, bgcolor=C_BG)
+        table.cell(t, 2, r, f_rate(wF, lF), text_color=color.yellow, text_size=size.small, bgcolor=C_BG)
+    else
+        table.cell(t, 0, r, "TOPLAM", text_color=color.yellow, text_size=size.small, bgcolor=C_BG)
+        table.cell(t, 1, r, str.tostring(tot), text_color=color.yellow, text_size=size.small, bgcolor=C_BG)
+        table.cell(t, 2, r, str.tostring(w), text_color=C_WIN, text_size=size.small, bgcolor=C_BG)
+        table.cell(t, 3, r, str.tostring(l), text_color=C_LOSS, text_size=size.small, bgcolor=C_BG)
+        table.cell(t, 4, r, f_rate(w, l), text_color=color.yellow, text_size=size.small, bgcolor=C_BG)
+        table.cell(t, 5, r, str.tostring(totF), text_color=color.white, text_size=size.small, bgcolor=C_BG)
+        table.cell(t, 6, r, f_rate(wF, lF), text_color=C_WIN, text_size=size.small, bgcolor=C_BG)
+        table.cell(t, 7, r, str.tostring(avg), text_color=C_SCORE, text_size=size.small, bgcolor=C_BG)
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â• VOLUME CONFIRMATION â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+f_volumeConfirm(int lookback = 20) =>
+    float avgVol = ta.sma(volume, lookback)
+    float volRatio = nz(volume / avgVol, 1.0)
+    bool spike = volRatio >= 1.5
+    bool increasing = volume > volume[1] and volume[1] > volume[2]
+    int score = spike ? 30 : (increasing ? 20 : (volume > avgVol ? 10 : 0))
+    [spike or increasing, score]
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â• REVERSAL CANDLE â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+f_reversalCandle(bool isBull) =>
+    float body = math.abs(close - open)
+    float upperW = high - math.max(close, open)
+    float lowerW = math.min(close, open) - low
+    bool hammer = isBull and lowerW >= body * 2 and upperW <= body * 0.5 and close > open
+    bool engulf = isBull ? (close > open and close[1] < open[1] and close > open[1] and open < close[1]) : (close < open and close[1] > open[1] and close < open[1] and open > close[1])
+    bool star = not isBull and upperW >= body * 2 and lowerW <= body * 0.5 and close < open
+    bool reversal = isBull ? (hammer or engulf) : (star or engulf)
+    int score = reversal ? 25 : 0
+    [reversal, score]
+if barstate.islast and showTable
+    // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+    // DINAMIK SKOR HESAPLAMA - Yeni filtreler gecmis pattern'leri de etkiler
+    // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+    float dynGartScoreSum = 0.0, int dynGartScoreCount = 0
+    float dynBatScoreSum = 0.0, int dynBatScoreCount = 0
+    float dynBflyScoreSum = 0.0, int dynBflyScoreCount = 0
+    float dynSharkScoreSum = 0.0, int dynSharkScoreCount = 0
+    float dynCyphScoreSum = 0.0, int dynCyphScoreCount = 0
+    // Her pattern icin dinamik skoru hesapla
+    // OPTIMIZED: Limit to most recent patterns to prevent timeout
+    int patTypesSize = array.size(patTypes)
+    int maxPatToScore = math.min(patTypesSize, 25)
+    if patTypesSize > 0
+        for i = patTypesSize - 1 to math.max(0, patTypesSize - maxPatToScore)
+            if i < array.size(patTypes)
+                string pType = array.get(patTypes, i)
+                bool hasPatternData = array.size(patX) > i and array.size(patA) > i and array.size(patB) > i and array.size(patC) > i and array.size(patD) > i
+                bool hasBarData = array.size(patXbar) > i and array.size(patAbar) > i and array.size(patBbar) > i and array.size(patCbar) > i and array.size(patDbar) > i
+                bool hasBullData = array.size(patIsBull) > i
+                if hasPatternData and hasBarData and hasBullData
+                    float pX = array.get(patX, i)
+                    float pA = array.get(patA, i)
+                    float pB = array.get(patB, i)
+                    float pC = array.get(patC, i)
+                    float pD = array.get(patD, i)
+                    int pXbar = array.get(patXbar, i)
+                    int pAbar = array.get(patAbar, i)
+                    int pBbar = array.get(patBbar, i)
+                    int pCbar = array.get(patCbar, i)
+                    int pDbar = array.get(patDbar, i)
+                    bool pIsBull = array.get(patIsBull, i)
+                    // Mevcut filtrelerle skoru yeniden hesapla
+                    float dynScore = calculateQualityScore(pType, pX, pA, pB, pC, pD, pXbar, pAbar, pBbar, pCbar, pDbar, pIsBull)
+                    // Pattern turune gore topla
+                    if pType == "Gartley"
+                        dynGartScoreSum += dynScore
+                        dynGartScoreCount += 1
+                    else if pType == "Bat"
+                        dynBatScoreSum += dynScore
+                        dynBatScoreCount += 1
+                    else if pType == "Butterfly"
+                        dynBflyScoreSum += dynScore
+                        dynBflyScoreCount += 1
+                    else if pType == "Shark"
+                        dynSharkScoreSum += dynScore
+                        dynSharkScoreCount += 1
+                    else if pType == "Cypher"
+                        dynCyphScoreSum += dynScore
+                        dynCyphScoreCount += 1
+    // Dinamik ortalama skorlari hesapla
+    int avgGartScore = dynGartScoreCount > 0 ? int(dynGartScoreSum / dynGartScoreCount) : 0
+    int avgBatScore = dynBatScoreCount > 0 ? int(dynBatScoreSum / dynBatScoreCount) : 0
+    int avgBflyScore = dynBflyScoreCount > 0 ? int(dynBflyScoreSum / dynBflyScoreCount) : 0
+    int avgSharkScore = dynSharkScoreCount > 0 ? int(dynSharkScoreSum / dynSharkScoreCount) : 0
+    int avgCyphScore = dynCyphScoreCount > 0 ? int(dynCyphScoreSum / dynCyphScoreCount) : 0
+    float totalScoreSum = dynGartScoreSum + dynBatScoreSum + dynBflyScoreSum + dynSharkScoreSum + dynCyphScoreSum
+    int totalScoreCount = dynGartScoreCount + dynBatScoreCount + dynBflyScoreCount + dynSharkScoreCount + dynCyphScoreCount
+    int avgTotalScore = totalScoreCount > 0 ? int(totalScoreSum / totalScoreCount) : 0
+    // GENEL ISTATISTIKLER (mevcut)
+    int visGartW = gartleyOn ? gartW : 0, int visGartL = gartleyOn ? gartL : 0, int visBatW = batOn ? batW : 0, int visBatL = batOn ? batL : 0
+    int visBflyW = butterflyOn ? bflyW : 0, int visBflyL = butterflyOn ? bflyL : 0, int visSharkW = sharkOn ? sharkW : 0, int visSharkL = sharkOn ? sharkL : 0
+    int visCyphW = cypherOn ? cyphW : 0, int visCyphL = cypherOn ? cyphL : 0
+    int visGartT = visGartW + visGartL, int visBatT = visBatW + visBatL, int visBflyT = visBflyW + visBflyL
+    int visSharkT = visSharkW + visSharkL, int visCyphT = visCyphW + visCyphL
+    int totalW = visGartW + visBatW + visBflyW + visSharkW + visCyphW
+    int totalL = visGartL + visBatL + visBflyL + visSharkL + visCyphL
+    int totalPat = totalW + totalL
+    // FILTRELENMIÅ ISTATISTIKLER
+    int visGartWF = gartleyOn ? gartW_filtered : 0, int visGartLF = gartleyOn ? gartL_filtered : 0, int visBatWF = batOn ? batW_filtered : 0, int visBatLF = batOn ? batL_filtered : 0
+    int visBflyWF = butterflyOn ? bflyW_filtered : 0, int visBflyLF = butterflyOn ? bflyL_filtered : 0, int visSharkWF = sharkOn ? sharkW_filtered : 0, int visSharkLF = sharkOn ? sharkL_filtered : 0
+    int visCyphWF = cypherOn ? cyphW_filtered : 0, int visCyphLF = cypherOn ? cyphL_filtered : 0
+    int visGartTF = visGartWF + visGartLF, int visBatTF = visBatWF + visBatLF, int visBflyTF = visBflyWF + visBflyLF
+    int visSharkTF = visSharkWF + visSharkLF, int visCyphTF = visCyphWF + visCyphLF
+    int totalWF = visGartWF + visBatWF + visBflyWF + visSharkWF + visCyphWF
+    int totalLF = visGartLF + visBatLF + visBflyLF + visSharkLF + visCyphLF
+    int totalPatF = totalWF + totalLF
+    // NOT: avgGartScore, avgBatScore vb. yukarida dinamik olarak hesaplandi
+    // TABLO BAÅLIKLARI
+    if i_compactStats
+        // KOMPAKT MOD (Pattern | Count | FWR%)
+        table.cell(tbl, 0, 0, "PATTERN", text_color=color.white, text_size=size.small, bgcolor=C_HDR)
+        table.cell(tbl, 1, 0, "Count", text_color=color.white, text_size=size.small, bgcolor=C_HDR)
+        table.cell(tbl, 2, 0, "FWR%", text_color=color.yellow, text_size=size.small, bgcolor=C_HDR)
+    else
+        // TAM MOD (Pattern | Total | W | L | WR% | Filtered | FWR% | AvgS) - Tooltip'li
+        table.cell(tbl, 0, 0, "PATTERN", text_color=color.white, text_size=size.small, bgcolor=C_HDR, tooltip="Formasyon tipi")
+        table.cell(tbl, 1, 0, "Total", text_color=color.white, text_size=size.small, bgcolor=C_HDR, tooltip="Toplam tespit edilen formasyon sayisi")
+        table.cell(tbl, 2, 0, "W", text_color=C_WIN, text_size=size.small, bgcolor=C_HDR, tooltip="W = Kazanan\nTP hedefine ulasan trade sayisi")
+        table.cell(tbl, 3, 0, "L", text_color=C_LOSS, text_size=size.small, bgcolor=C_HDR, tooltip="L = Kaybeden\nSL'ye takilan trade sayisi")
+        table.cell(tbl, 4, 0, "%", text_color=color.yellow, text_size=size.small, bgcolor=C_HDR, tooltip="Ham Kazanma Orani\n(W / Total) x 100\nFiltre uygulanmamis")
+        table.cell(tbl, 5, 0, "Filt", text_color=color.white, text_size=size.small, bgcolor=C_HDR, tooltip="Filtrelenmis Pattern Sayisi\nSadece A+, A, B kaliteli olanlar")
+        table.cell(tbl, 6, 0, "FWR%", text_color=C_WIN, text_size=size.small, bgcolor=C_HDR, tooltip="[*] EN ONEMLI METRIK!\nFiltrelenmis Kazanma Orani\nSadece kaliteli pattern'lerin WR%'si")
+        table.cell(tbl, 7, 0, "AvgS", text_color=C_SCORE, text_size=size.small, bgcolor=C_HDR, tooltip="Ortalama Kalite Skoru (0-100)\nYuksek = Daha guclu confluences")
+    // PATTERN ROWS
+    f_tblRow(tbl, 1, "Gartley", colGartley, gartleyOn, visGartT, visGartW, visGartL, visGartTF, visGartWF, visGartLF, avgGartScore, i_compactStats)
+    f_tblRow(tbl, 2, "Bat", colBat, batOn, visBatT, visBatW, visBatL, visBatTF, visBatWF, visBatLF, avgBatScore, i_compactStats)
+    f_tblRow(tbl, 3, "Butterfly", colButterfly, butterflyOn, visBflyT, visBflyW, visBflyL, visBflyTF, visBflyWF, visBflyLF, avgBflyScore, i_compactStats)
+    f_tblRow(tbl, 4, "Shark", colShark, sharkOn, visSharkT, visSharkW, visSharkL, visSharkTF, visSharkWF, visSharkLF, avgSharkScore, i_compactStats)
+    f_tblRow(tbl, 5, "Cypher", colCypher, cypherOn, visCyphT, visCyphW, visCyphL, visCyphTF, visCyphWF, visCyphLF, avgCyphScore, i_compactStats)
+    f_tblTotal(tbl, 6, totalPat, totalW, totalL, totalPatF, totalWF, totalLF, avgTotalScore, i_compactStats)
+alertcondition(lastPat1 == bar_index or lastPat2 == bar_index or lastPat3 == bar_index or lastPat4 == bar_index or lastAbcd1 == bar_index or lastAbcd2 == bar_index or lastAbcd3 == bar_index or lastAbcd4 == bar_index, title='Malibu Kirilim', message='Malibu: Harmonik formasyon tespit edildi!')
+alertcondition(bPointBullishAlert, title='Harmonic B-Point (Bullish)', message='Malibu: BULLISH B-Point teyit edildi! Potansiyel alim firsati.')
+alertcondition(bPointBearishAlert, title='Harmonic B-Point (Bearish)', message='Malibu: BEARISH B-Point teyit edildi! Potansiyel satis firsati.')

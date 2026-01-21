@@ -38,5 +38,10 @@ get_auth_url*.py
 .DS_Store
 Thumbs.db
 
+# Projects & Archive
+Projects/
+archive/
+
 # Local data (keep storage structure, ignore data)
 # /data/  <-- Uncomment if you don't want to track data dir
+

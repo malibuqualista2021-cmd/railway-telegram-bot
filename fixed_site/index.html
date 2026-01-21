@@ -134,6 +134,23 @@
                     watchOnYoutube: "PLAYLİSTİ BAŞLAT",
                     cta: "Eğİtİmlerİ Kaçırma"
                 },
+                freeIndicators: {
+                    title: "Ücretsİz İndİkatörlerİm",
+                    sub: "Topluluk için geliştirdiğim açık kaynaklı ve ücretsiz araçlar",
+                    items: [
+                        {
+                            name: "SMT - Malibu",
+                            desc: "Smart Money Tooling - Yapısal analiz ve likidite takibi için geliştirilmiş hibrit araç.",
+                            link: "https://tr.tradingview.com/script/Fu6PiuY2/"
+                        },
+                        {
+                            name: "Advanced Order Block Visualization",
+                            desc: "Kurumsal emir bloklarını ve mitigasyon süreçlerini görselleştiren gelişmiş panel.",
+                            link: "https://tr.tradingview.com/script/Fh5woELW/"
+                        }
+                    ],
+                    cta: "TradingView'da İncele"
+                },
                 pricing: {
                     title: "2 Pro Araç, 1 Fiyat",
                     sub: "Harmonic PRZ + SMC Malibu = Kurumsal Onaylı İşlemler",
@@ -230,6 +247,23 @@
                     vid2Title: "SMT / ICT Method",
                     watchOnYoutube: "START PLAYLIST",
                     cta: "Don’t Miss Education"
+                },
+                freeIndicators: {
+                    title: "My Free Indİcators",
+                    sub: "Open-source and free tools developed for the community",
+                    items: [
+                        {
+                            name: "SMT - Malibu",
+                            desc: "Smart Money Tooling - Hybrid tool developed for structural analysis and liquidity tracking.",
+                            link: "https://tr.tradingview.com/script/Fu6PiuY2/"
+                        },
+                        {
+                            name: "Advanced Order Block Visualization",
+                            desc: "Advanced panel visualizing institutional order blocks and mitigation processes.",
+                            link: "https://tr.tradingview.com/script/Fh5woELW/"
+                        }
+                    ],
+                    cta: "View on TradingView"
                 },
                 pricing: {
                     title: "2 Pro Tools, 1 Price",
@@ -408,6 +442,7 @@
                                 </div>
                                 <div className="flex items-center gap-4 md:gap-8 ml-auto">
                                     <a href="#youtube" className="hidden md:block text-[10px] font-black text-slate-400 hover:text-white uppercase tracking-widest transition-colors">Academy</a>
+                                    <a href="#free-indicators" className="hidden md:block text-[10px] font-black text-slate-400 hover:text-white uppercase tracking-widest transition-colors">Free Tools</a>
                                     <a href="#plans" className="hidden md:block text-[10px] font-black text-slate-400 hover:text-white uppercase tracking-widest transition-colors">Plans</a>
                                     <a
                                         href="https://t.me/MallibuSupportbot"
@@ -607,6 +642,46 @@
                                             <div className="absolute inset-2 border border-cyan-500/10 rounded-full animate-[spin_10s_linear_infinite]"></div>
                                             <span className="text-cyan-500 text-xs font-black uppercase tracking-tighter">Verified</span>
                                         </div>
+                                    </div>
+                                </div>
+                            </section>
+
+                            {/* Free Indicators Section */}
+                            <section id="free-indicators" className="py-24 px-6 bg-gradient-to-b from-[#05070A] to-black border-y border-white/5">
+                                <div className="max-w-7xl mx-auto">
+                                    <div className="text-center mb-16">
+                                        <h2 className="text-3xl md:text-5xl font-black text-white/90 uppercase tracking-tighter mb-4 font-['Plus_Jakarta_Sans']">
+                                            {safeGet(t, 'freeIndicators.title')}
+                                        </h2>
+                                        <p className="text-slate-500 text-sm font-medium uppercase tracking-widest">
+                                            {safeGet(t, 'freeIndicators.sub')}
+                                        </p>
+                                    </div>
+
+                                    <div className="grid grid-cols-1 md:grid-cols-2 gap-8 max-w-5xl mx-auto">
+                                        {(safeGet(t, 'freeIndicators.items', []) || []).map((item, i) => (
+                                            <div key={i} className="group p-8 bg-white/[0.02] border border-white/5 rounded-3xl hover:bg-white/[0.04] hover:border-amber-500/30 transition-all duration-500 relative overflow-hidden">
+                                                <div className="absolute top-0 right-0 p-4 opacity-10 group-hover:opacity-100 transition-opacity">
+                                                    <div className="w-12 h-12 bg-amber-500 rounded-full flex items-center justify-center text-black">
+                                                        <Icons.ZapSmall />
+                                                    </div>
+                                                </div>
+                                                <h3 className="text-xl font-black text-white mb-4 uppercase tracking-tight group-hover:text-amber-500 transition-colors">
+                                                    {item.name}
+                                                </h3>
+                                                <p className="text-slate-400 text-sm leading-relaxed font-medium mb-8">
+                                                    {item.desc}
+                                                </p>
+                                                <a
+                                                    href={item.link}
+                                                    target="_blank"
+                                                    rel="noopener noreferrer"
+                                                    className="inline-flex items-center gap-2 text-[10px] font-black text-amber-500 uppercase tracking-widest border-b border-amber-500/20 pb-1 hover:border-amber-500 transition-all"
+                                                >
+                                                    {safeGet(t, 'freeIndicators.cta')} <Icons.Check />
+                                                </a>
+                                            </div>
+                                        ))}
                                     </div>
                                 </div>
                             </section>

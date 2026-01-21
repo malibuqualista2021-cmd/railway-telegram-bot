@@ -21,7 +21,6 @@ from datetime import datetime, timedelta, timezone
 os.environ['PYTHONUNBUFFERED'] = '1'
 
 import httpx
-import requests
 from flask import Flask, jsonify
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
@@ -62,6 +61,15 @@ PLANS = {
     "trial": {"name": "7 Günlük Deneme", "price": "Ücretsiz", "days": 7}
 }
 
+# Red sebepleri (Gelişmiş)
+REJECTION_REASONS = {
+    "duplicate": "🔄 Mükerrer Deneme Kaydı",
+    "invalid_txid": "💳 Geçersiz TXID / Ödeme",
+    "pending": "⏳ Ödeme Beklemede / Onaylanmadı",
+    "invalid_user": "👤 Geçersiz TradingView Adı",
+    "other": "❓ Diğer Sebep"
+}
+
 # ==================== STATE ====================
 START_TIME = datetime.now(timezone.utc)
 BOT_STATUS = {"running": False, "errors": 0, "restarts": 0}
@@ -69,14 +77,7 @@ pending_requests = {}
 last_user_message = {}  # {admin_id: {user_id: str, user_name: str}}
 SHUTDOWN = threading.Event()
 
-# Red sebepleri
-REJECTION_REASONS = {
-    "duplicate_trial": "Mükerrer ücretsiz deneme kaydı",
-    "invalid_payment": "Geçersiz ödeme bilgisi",
-    "tv_not_found": "TradingView kullanıcısı bulunamadı",
-    "suspicious": "Şüpheli aktivite",
-    "other": "Diğer sebep"
-}
+
 
 # ==================== FLASK ====================
 app = Flask(__name__)
@@ -470,7 +471,7 @@ async def cmd_notify_expired(update: Update, context):
         return
     
     sent = 0
-   expired_count = len(expired_users)
+    expired_count = len(expired_users)
     for user in expired_users:
         try:
             raw_id = user.get('telegram_id', '')
@@ -547,20 +548,36 @@ async def cmd_scan(update: Update, context):
         await status_msg.edit_text(f"❌ Tarama sırasında teknik hata oluştu: {e}")
 
 async def cmd_sync(update: Update, context):
-    """Sheets senkronizasyonu"""
+    """Sheets senkronizasyonu - Kayıtları tazele"""
     if str(update.effective_user.id) != str(ADMIN_ID):
         return
-    await update.message.reply_text("🔄 Sheets ile senkronizasyon başlatıldı...")
-    # Webhook üzerinden veri çekme mantığı buraya gelebilir
-    await update.message.reply_text("✅ Senkronizasyon tamamlandı.")
+    status_msg = await update.message.reply_text("🔄 Sheets senkronizasyonu başlatıldı...")
+    
+    try:
+        async with httpx.AsyncClient(timeout=30.0, follow_redirects=True) as client:
+            response = await client.get(f"{SHEETS_WEBHOOK}?action=sync")
+            if response.status_code == 200:
+                await status_msg.edit_text("✅ Sheets ile veriler başarıyla eşitlendi.")
+            else:
+                await status_msg.edit_text(f"❌ Senkronizasyon hatası: {response.status_code}")
+    except Exception as e:
+        await status_msg.edit_text(f"❌ Bağlantı hatası: {e}")
 
 async def cmd_repair_sheets(update: Update, context):
-    """Sheets tablolarını onar"""
+    """Sheets tablolarını onar ve sütunları kontrol et"""
     if str(update.effective_user.id) != str(ADMIN_ID):
         return
-    await update.message.reply_text("🔧 Sheets tabloları kontrol ediliyor...")
-    # Tablo onarım mantığı buraya gelecek
-    await update.message.reply_text("✅ Onarım tamamlandı.")
+    status_msg = await update.message.reply_text("🔧 Sheets tabloları onarılıyor...")
+    
+    try:
+        async with httpx.AsyncClient(timeout=30.0, follow_redirects=True) as client:
+            response = await client.get(f"{SHEETS_WEBHOOK}?action=repair")
+            if response.status_code == 200:
+                await status_msg.edit_text("✅ Sheets tabloları ve formüller onarıldı.")
+            else:
+                await status_msg.edit_text(f"❌ Onarım hatası: {response.status_code}")
+    except Exception as e:
+        await status_msg.edit_text(f"❌ Bağlantı hatası: {e}")
 
 async def cmd_reply(update: Update, context):
     """Admin'in kullanıcıya direkt yanıt vermesi"""
@@ -594,6 +611,26 @@ async def cmd_reply(update: Update, context):
         await update.message.reply_text(f"✅ Mesaj gönderildi: {last_msg['user_name']}")
     except Exception as e:
         await update.message.reply_text(f"❌ Mesaj gönderilemedi: {e}")
+
+async def cmd_test_reject(update: Update, context):
+    """Admin için reddetme menüsünü test etmesi için sahte talep oluşturur"""
+    if str(update.effective_user.id) != str(ADMIN_ID):
+        return
+    
+    user_id = str(update.effective_user.id)
+    keyboard = []
+    for reason_key, reason_text in REJECTION_REASONS.items():
+        keyboard.append([InlineKeyboardButton(
+            reason_text, 
+            callback_data=f"manualreject_{user_id}_{reason_key}"
+        )])
+    
+    await update.message.reply_text(
+        "🧪 *Reddetme Test Modu*\n\n"
+        "Aşağıdaki butonlardan birine basarak reddetme mesajının size nasıl geleceğini test edebilirsiniz:",
+        reply_markup=InlineKeyboardMarkup(keyboard),
+        parse_mode="Markdown"
+    )
 
 async def cmd_reject_manual(update: Update, context):
     """EKLİ KAYITLAR için manuel red (sebep ile)"""
@@ -645,10 +682,11 @@ async def cmd_help(update: Update, context):
             "/status - Bot durumu\n"
             "/reply \\[mesaj\\] - Kullanıcıya yanıt\n"
             "/reject \\[user\\_id\\] - Manuel red (sebepli)\n"
+            "/test - Reddetme menüsünü test et\n"
             "/notify\\_expired - Süresi dolanlara bildirim\n"
             "/scan - Tarama yap\n"
             "/sync - Verileri senkronize et\n"
-            "/repair\\_sheets - Tabloları onar"
+            "/repair - Tabloları onar"
         )
     
     await update.message.reply_text(text, parse_mode="Markdown")
@@ -696,7 +734,7 @@ async def run_bot():
     
     application = Application.builder().token(BOT_TOKEN).build()
     
-    # Conversation handler
+    # Conversation handler - per_message=False uyarısını engellemek için explicit ayar
     conv_handler = ConversationHandler(
         entry_points=[
             CommandHandler("start", cmd_start),
@@ -707,7 +745,10 @@ async def run_bot():
             TXID: [MessageHandler(filters.TEXT & ~filters.COMMAND, receive_txid)]
         },
         fallbacks=[CommandHandler("cancel", cmd_cancel)],
-        conversation_timeout=600
+        conversation_timeout=600,
+        per_message=False,  # Explicit: callback query tracking devre dışı
+        per_chat=True,       # Her chat için ayrı conversation state
+        per_user=True        # Her user için ayrı conversation state
     )
     
     application.add_handler(conv_handler)
@@ -716,10 +757,11 @@ async def run_bot():
     application.add_handler(CommandHandler("status", cmd_status))
     application.add_handler(CommandHandler("reply", cmd_reply))
     application.add_handler(CommandHandler("reject", cmd_reject_manual))
+    application.add_handler(CommandHandler("test", cmd_test_reject))
     application.add_handler(CommandHandler("notify_expired", cmd_notify_expired))
     application.add_handler(CommandHandler("scan", cmd_scan))
     application.add_handler(CommandHandler("sync", cmd_sync))
-    application.add_handler(CommandHandler("repair_sheets", cmd_repair_sheets))
+    application.add_handler(CommandHandler("repair", cmd_repair_sheets))
     application.add_handler(CallbackQueryHandler(admin_callback, pattern="^(approve_|reject|rejectreason|manualreject)"))
     
     # Kullanıcı mesajlarını yakala (ConversationHandler dışında)
@@ -728,17 +770,29 @@ async def run_bot():
     
     await application.initialize()
     
-    # Webhook sil
-    for i in range(3):
+    # ÖNEMLİ: Conflict önleme - mevcut webhook ve oturumları temizle
+    log.info("🔄 Telegram oturumu temizleniyor...")
+    for attempt in range(5):
         try:
+            # Webhook varsa sil
             await application.bot.delete_webhook(drop_pending_updates=True)
+            log.info("✅ Webhook silindi, bekleyen güncellemeler atıldı")
+            
+            # Önceki oturumu sonlandırmak için kısa bir getUpdates çağrısı
+            await asyncio.sleep(1)
+            await application.bot.get_updates(offset=-1, timeout=1)
+            log.info("✅ Önceki oturum temizlendi")
             break
-        except:
+        except Conflict:
+            log.warning(f"⚠️ Conflict tespit edildi (deneme {attempt+1}/5), bekleniyor...")
+            await asyncio.sleep(5 * (attempt + 1))
+        except Exception as e:
+            log.warning(f"⚠️ Temizlik hatası: {e}")
             await asyncio.sleep(2)
     
     await application.start()
     BOT_STATUS["running"] = True
-    log.info("✅ Bot başlatıldı - polling...")
+    log.info("✅ Bot başlatıldı - polling modunda")
     
     # Polling loop
     offset = None
@@ -753,16 +807,25 @@ async def run_bot():
         except TimedOut:
             continue
         except RetryAfter as e:
+            log.warning(f"⏳ Rate limit - {e.retry_after} saniye bekleniyor...")
             await asyncio.sleep(e.retry_after + 1)
         except Conflict:
-            log.error("CONFLICT - başka bot çalışıyor!")
-            await asyncio.sleep(30)
+            # 🔴 KRİTİK: Conflict = başka instance çalışıyor = BOT TAMAMEN DURMALI
+            log.error("="*60)
+            log.error("🔴 FATAL: CONFLICT - Başka bir bot instance çalışıyor!")
+            log.error("🔴 Bu bot instance'ı DURDURULUYOR.")
+            log.error("🔴 Lütfen Railway'de tek instance olduğundan emin olun.")
+            log.error("="*60)
+            BOT_STATUS["running"] = False
+            BOT_STATUS["errors"] += 1
+            SHUTDOWN.set()  # Bot'u kalıcı olarak durdur
+            break  # Polling döngüsünden çık
         except (NetworkError, TelegramError) as e:
-            log.warning(f"Ağ hatası: {e}")
+            log.warning(f"⚠️ Ağ hatası: {e}")
             await asyncio.sleep(5)
         except Exception as e:
             BOT_STATUS["errors"] += 1
-            log.error(f"Hata: {e}")
+            log.error(f"❌ Beklenmeyen hata: {e}")
             await asyncio.sleep(5)
     
     await application.stop()
@@ -789,19 +852,7 @@ def bot_thread():
             log.info("♻️ 3 saniye sonra yeniden başlatılacak...")
             time.sleep(3)
 
-def keep_alive_thread():
-    """Botun uykuya geçmesini engelleyen ping sistemi"""
-    time.sleep(60)
-    while not SHUTDOWN.is_set():
-        try:
-            url = f"https://{RAILWAY_URL}/ping" if RAILWAY_URL else f"http://localhost:{PORT}/ping"
-            response = requests.get(url, timeout=10)
-            if response.status_code == 200:
-                log.debug("Keep-alive ping successful")
-        except:
-            pass
-        # 3 dakikada bir ping at
-        time.sleep(180)
+
 
 def signal_handler(signum, frame):
     """Graceful shutdown"""
@@ -829,11 +880,10 @@ def main():
     # Bot thread
     threading.Thread(target=bot_thread, daemon=False).start()
     
-    # Keep-alive thread
-    threading.Thread(target=keep_alive_thread, daemon=True).start()
-    
     # Flask
     app.run(host="0.0.0.0", port=PORT, threaded=True, use_reloader=False)
 
 if __name__ == "__main__":
     main()
+
+

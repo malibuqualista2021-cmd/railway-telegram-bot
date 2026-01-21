@@ -1,9 +1,7 @@
-python-telegram-bot[job-queue]==20.7
+python-telegram-bot>=21.0
+httpx
 flask==3.0.0
 flask-cors==4.0.0
 groq==0.4.2
-requests==2.31.0
 python-dotenv==1.0.0
 pytz==2023.3.post1
-httpx==0.26.0
-# Force rebuild: 2026-01-16T14:15:00
