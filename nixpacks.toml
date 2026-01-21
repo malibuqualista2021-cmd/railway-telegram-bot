@@ -1,5 +1,0 @@
-[start]
-cmd = "python telegram_bot.py"
-
-[variables]
-PYTHONUNBUFFERED = "1"
