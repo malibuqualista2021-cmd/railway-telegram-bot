@@ -276,7 +276,7 @@ async def handle_user_message(update: Update, context):
 # ==================== BOT ENGINE ====================
 async def run_bot():
     log.info("Bot başlatılıyor...")
-    application = Application.builder().token(BOT_TOKEN).build()
+        application = Application.builder().token(BOT_TOKEN).updater(None).build()
 
     conv_handler = ConversationHandler(
         entry_points=[CommandHandler("start", cmd_start), CallbackQueryHandler(plan_selected, pattern="^(plan_|trial)")],
