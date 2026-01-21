@@ -1,5 +1,5 @@
 [start]
-cmd = "python malibu-bot/bot.py"
+cmd = "python telegram_bot.py"
 
 [variables]
 PYTHONUNBUFFERED = "1"
